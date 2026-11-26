@@ -1,0 +1,23 @@
+name: Sonde API (étape 0)
+
+on:
+  push:
+    branches: [etape-0-sonde]
+  workflow_dispatch:
+
+jobs:
+  sonde:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer Stockfish
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq stockfish
+
+      - name: Exécuter la sonde API réelle
+        run: python3 tools/sonde_api.py
