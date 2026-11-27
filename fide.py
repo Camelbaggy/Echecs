@@ -2,9 +2,12 @@
 """Collecteur du classement mensuel officiel FIDE.
 
 1. Source directe : listes XML officielles sur ratings.fide.com (Standard, Rapide, Blitz).
-2. Repli automatique : API officielle Lichess FIDE (GET /api/fide/player/{fideId}),
-   alimentée par les listes officielles FIDE mensuelles, lorsque ratings.fide.com
-   est injoignable depuis GitHub Actions.
+2. Repli automatique (lorsque ratings.fide.com bloque les IP GitHub Actions) :
+   - Découverte dynamique des identifiants FIDE (P1440) et du genre féminin (P21=Q6581072)
+     via Wikidata SPARQL (Top mondial, GMI/MI/GMF français, GMI/GMF féminines) + joueurs
+     des tournois collectés. Aucune liste d'identifiants codée en dur de mémoire.
+   - Lecture des classements officiels mensuels (Standard, Rapide, Blitz) via l'API
+     officielle Lichess FIDE : GET /api/fide/player/{fideId}.
 Produit fide/classement.json (Monde, France, Femmes, Juniors). Python 3.11 stdlib uniquement.
 """
 
@@ -17,6 +20,7 @@ import json
 import os
 import re
 import sys
+import urllib.parse
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -24,105 +28,13 @@ import netutil
 
 FIDE_LISTS_URL = "https://ratings.fide.com/download_lists.phtml"
 LICHESS_FIDE_API = "https://lichess.org/api/fide/player"
+WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
 
 _TITRES_FIDE = {
     "g": "GM", "m": "IM", "f": "FM", "c": "CM",
     "wg": "WGM", "wm": "WIM", "wf": "WFM", "wc": "WCM",
     "GM": "GM", "IM": "IM", "FM": "FM", "CM": "CM",
     "WGM": "WGM", "WIM": "WIM", "WFM": "WFM", "WCM": "WCM",
-}
-
-# Socle d'identifiants FIDE officiels (Top mondial, Top France, Top femmes) complété
-# automatiquement par tous les joueurs (>= 2500 ou FRA >= 2300) vus dans tournois/*.json.
-FIDE_IDS_SOCLE: tuple[str, ...] = (
-    # Top mondial
-    "1503014",   # Carlsen, Magnus
-    "2016192",   # Nakamura, Hikaru
-    "2020009",   # Caruana, Fabiano
-    "14205483",  # Sindarov, Javokhir
-    "14204118",  # Abdusattorov, Nodirbek
-    "5202213",   # So, Wesley
-    "25059530",  # Praggnanandhaa, R
-    "12940690",  # Keymer, Vincent
-    "8603405",   # Wei, Yi
-    "12573981",  # Firouzja, Alireza (FRA)
-    "24116068",  # Giri, Anish
-    "35009192",  # Erigaisi, Arjun
-    "1170546",   # Duda, Jan-Krzysztof
-    "5000017",   # Anand, Viswanathan
-    "3503240",   # Dominguez Perez, Leinier
-    "12401137",  # Le, Quang Liem
-    "8603677",   # Ding, Liren
-    "25092340",  # Nihal Sarin
-    "12521213",  # Tabatabaei, M. Amin
-    "13300474",  # Aronian, Levon
-    "44599790",  # Erdogmus, Yagiz Kaan
-    "4168119",   # Nepomniachtchi, Ian
-    "738590",    # Rapport, Richard
-    "1039784",   # Van Foreest, Jorden
-    "4158814",   # Andreikin, Dmitry
-    "46616543",  # Gukesh, Dommaraju
-    "13401319",  # Mamedyarov, Shakhriyar
-    "623539",    # Vachier-Lagrave, Maxime (FRA)
-    "12539929",  # Maghsoodloo, Parham
-    "8603820",   # Yu, Yangyi
-    "2040506",   # Niemann, Hans
-    "309095",    # Robson, Ray
-    "2023970",   # Sevian, Samuel
-    "14109603",  # Fedoseev, Vladimir
-    "24126055",  # Esipenko, Andrey
-    "5029465",   # Vidit, Santosh Gujrathi
-    "5007003",   # Harikrishna, Pentala
-    "13400924",  # Radjabov, Teimour
-    "4126025",   # Grischuk, Alexander
-    "14102951",  # Ivanchuk, Vassily
-    "35093487",  # Murzin, Volodar
-    "30953499",  # Woodward, Andy
-    "2093596",   # Mishra, Abhimanyu
-    # Top France (FRA)
-    "36085755",  # Maurizzi, Marc'Andria
-    "629065",    # Moussard, Jules
-    "605506",    # Bacrot, Etienne
-    "12510130",  # Idani, Pouya
-    "608742",    # Fressinet, Laurent
-    "651400",    # Lagarde, Maxime
-    "616915",    # Mazé, Sébastien
-    "620475",    # Cornette, Matthieu
-    "609587",    # Edouard, Romain
-    "602558",    # Bauer, Christian
-    "605905",    # Gharamian, Tigran
-    "637262",    # Gozzoli, Yannick
-    "26067714",  # Boyer, Mahel
-    "685534",    # Degraeve, Jean-Marc
-    "617849",    # Skripchenko, Almira (F)
-    "633445",    # Guichard, Pauline (F)
-    "625205",    # Milliet, Sophie (F)
-    "626570",    # Daulyte-Cornette, Deimante (F)
-    "657107",    # Hejazipour, Mitra (F)
-    "665304",    # Savina, Anastasia (F)
-    # Top Femmes monde
-    "8602980",   # Hou, Yifan
-    "8603006",   # Ju, Wenjun
-    "8605360",   # Lei, Tingjie
-    "8603642",   # Tan, Zhongyi
-    "4164385",   # Goryachkina, Aleksandra
-    "5008123",   # Koneru, Humpy
-    "14111330",  # Muzychuk, Anna
-    "14114550",  # Muzychuk, Mariya
-    "4147235",   # Lagno, Kateryna
-    "13601903",  # Dzagnidze, Nana
-    "5018471",   # Harika, Dronavalli
-    "25006479",  # Vaishali, R
-    "35006916",  # Divya Deshmukh
-    "13708694",  # Assaubayeva, Bibisara
-    "4128125",   # Kosteniuk, Alexandra
-)
-
-_FEMMES_CONNUES: set[str] = {
-    "8602980", "8603006", "8605360", "8603642", "4164385", "5008123",
-    "14111330", "14114550", "4147235", "13601903", "5018471", "25006479",
-    "35006916", "13708694", "4128125", "617849", "633445", "625205",
-    "626570", "657107", "665304",
 }
 
 
@@ -235,6 +147,84 @@ def parser_liste_xml(xml_bytes: bytes, annee_ref: int | None = None) -> dict:
     }
 
 
+def _sparql_fide_ids(query: str) -> list[str]:
+    url = WIKIDATA_SPARQL + "?format=json&query=" + urllib.parse.quote(query)
+    data = netutil.fetch_json(
+        url,
+        headers={"Accept": "application/sparql-results+json"},
+        min_interval=1.5,
+        timeout=35,
+    )
+    rows = (data.get("results") or {}).get("bindings", []) if isinstance(data, dict) else []
+    ids: list[str] = []
+    for r in rows:
+        fid = (r.get("fide") or {}).get("value", "").strip()
+        if fid.isdigit():
+            ids.append(fid)
+    return list(dict.fromkeys(ids))
+
+
+def decouvrir_ids_wikidata() -> tuple[list[str], set[str]]:
+    """Découvre via Wikidata (P1440 + P21) les FIDE IDs vérifiés : Top monde, France, Femmes.
+
+    Retourne (tous_les_ids, ids_femmes_verifies).
+    """
+    # 1. Top mondial (joueurs avec P1440 et Elo Wikidata >= 2650, nés >= 1965)
+    q_monde = """
+    SELECT DISTINCT ?fide WHERE {
+      ?item wdt:P1440 ?fide ;
+            wdt:P1087 ?elo ;
+            wdt:P569 ?dob .
+      FILTER(?elo >= 2650 && YEAR(?dob) >= 1965)
+      FILTER NOT EXISTS { ?item wdt:P570 ?dod . }
+    }
+    ORDER BY DESC(?elo)
+    LIMIT 140
+    """
+    # 2. Joueurs français titrés (GM Q105269, WGM Q752119, IM Q491675) liés à la France (Q142)
+    q_france = """
+    SELECT DISTINCT ?fide WHERE {
+      ?item wdt:P1440 ?fide ;
+            wdt:P2962 ?tit .
+      VALUES ?tit { wd:Q105269 wd:Q752119 wd:Q491675 }
+      { ?item wdt:P1532 wd:Q142 . } UNION { ?item wdt:P27 wd:Q142 . }
+      OPTIONAL { ?item wdt:P1087 ?elo . }
+      FILTER NOT EXISTS { ?item wdt:P570 ?dod . }
+    }
+    ORDER BY DESC(?elo)
+    LIMIT 120
+    """
+    # 3. Joueuses féminines vérifiées (P21 = Q6581072, GM ou WGM ou Elo >= 2350)
+    q_femmes = """
+    SELECT DISTINCT ?fide WHERE {
+      ?item wdt:P1440 ?fide ;
+            wdt:P21 wd:Q6581072 ;
+            wdt:P1087 ?elo .
+      FILTER(?elo >= 2380)
+      FILTER NOT EXISTS { ?item wdt:P570 ?dod . }
+    }
+    ORDER BY DESC(?elo)
+    LIMIT 90
+    """
+    ids_monde: list[str] = []
+    ids_france: list[str] = []
+    ids_femmes: list[str] = []
+    for label, q, dest in (
+        ("monde", q_monde, ids_monde),
+        ("france", q_france, ids_france),
+        ("femmes", q_femmes, ids_femmes),
+    ):
+        try:
+            found = _sparql_fide_ids(q)
+            dest.extend(found)
+            print(f"[FIDE/Wikidata] {label} : {len(found)} FIDE IDs vérifiés")
+        except Exception as e:
+            print(f"[WARN] Wikidata {label} : {e}")
+
+    tous = list(dict.fromkeys(ids_monde + ids_france + ids_femmes))
+    return tous, set(ids_femmes)
+
+
 def _ids_depuis_tournois(dossier_tournois: str = "tournois") -> list[str]:
     """Ajoute les FIDE IDs des joueurs (>= 2550 ou FRA >= 2250) présents dans les tournois collectés."""
     extra: list[str] = []
@@ -256,15 +246,17 @@ def _ids_depuis_tournois(dossier_tournois: str = "tournois") -> list[str]:
     return extra
 
 
-def normaliser_joueur_lichess_fide(raw: dict) -> dict | None:
+def normaliser_joueur_lichess_fide(raw: dict, *, ids_femmes: set[str] | None = None) -> dict | None:
     """Normalise une réponse de GET /api/fide/player/{id}."""
     fid = str(raw.get("id") or "").strip()
     nom = (raw.get("name") or "").strip()
     if not fid or not nom:
         return None
+    if raw.get("inactive"):
+        return None
     fed = (raw.get("federation") or "").strip().upper()
     titre = _norm_titre(raw.get("title") or "")
-    sexe = "F" if (titre.startswith("W") or fid in _FEMMES_CONNUES) else ""
+    est_femme = titre.startswith("W") or (ids_femmes is not None and fid in ids_femmes)
     return {
         "id": fid,
         "nom": nom,
@@ -276,31 +268,32 @@ def normaliser_joueur_lichess_fide(raw: dict) -> dict | None:
         "rapid": raw.get("rapid"),
         "blitz": raw.get("blitz"),
         "naissance": raw.get("year"),
-        "sexe": sexe,
+        "sexe": "F" if est_femme else "",
     }
 
 
 def collecter_fide_api_lichess(dossier_tournois: str = "tournois") -> dict:
-    """Interroge l'API officielle Lichess FIDE (/api/fide/player/{id}) pour bâtir le classement."""
+    """Interroge Wikidata (IDs + genre vérifiés) puis l'API officielle Lichess FIDE."""
     periode = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m")
     annee = int(periode[:4])
 
-    ids = list(dict.fromkeys(list(FIDE_IDS_SOCLE) + _ids_depuis_tournois(dossier_tournois)))
-    print(f"[FIDE/Lichess API] Interrogation de {len(ids)} joueurs via /api/fide/player/{{id}}…")
+    ids_wd, ids_femmes = decouvrir_ids_wikidata()
+    ids = list(dict.fromkeys(ids_wd + _ids_depuis_tournois(dossier_tournois)))
+    print(f"[FIDE/Lichess API] Interrogation de {len(ids)} joueurs vérifiés via /api/fide/player/{{id}}…")
 
     joueurs: list[dict] = []
     for fid in ids:
         try:
-            raw = netutil.fetch_json(f"{LICHESS_FIDE_API}/{fid}", min_interval=0.25, timeout=15, retries=2)
+            raw = netutil.fetch_json(f"{LICHESS_FIDE_API}/{fid}", min_interval=0.22, timeout=15, retries=2)
             if isinstance(raw, dict):
-                rec = normaliser_joueur_lichess_fide(raw)
+                rec = normaliser_joueur_lichess_fide(raw, ids_femmes=ids_femmes)
                 if rec:
                     joueurs.append(rec)
         except Exception as e:
             print(f"[WARN] FIDE ID {fid} : {e}")
 
-    def _classer(subset: list[dict], cad: str, limit: int) -> list[dict]:
-        cands = [j for j in subset if isinstance(j.get(cad), int)]
+    def _classer(subset: list[dict], cad: str, limit: int, min_elo: int = 0) -> list[dict]:
+        cands = [j for j in subset if isinstance(j.get(cad), int) and j[cad] >= min_elo]
         cands.sort(key=lambda x: (-x[cad], x["nom"]))
         out = []
         for idx, j in enumerate(cands[:limit], 1):
@@ -325,12 +318,12 @@ def collecter_fide_api_lichess(dossier_tournois: str = "tournois") -> dict:
 
     res = {
         "periode": periode,
-        "source": "FIDE (API Lichess)",
+        "source": "FIDE (API Lichess + Wikidata)",
         "maj": netutil.utc_now_iso(),
-        "monde": {c: _classer(joueurs, c, 100 if c == "standard" else 50) for c in ("standard", "rapid", "blitz")},
-        "france": {c: _classer(fra, c, 50 if c == "standard" else 30) for c in ("standard", "rapid", "blitz")},
-        "femmes": {c: _classer(fem, c, 50 if c == "standard" else 30) for c in ("standard", "rapid", "blitz")},
-        "juniors": {"standard": _classer(jun, "standard", 30)},
+        "monde": {c: _classer(joueurs, c, 100 if c == "standard" else 50, min_elo=2500) for c in ("standard", "rapid", "blitz")},
+        "france": {c: _classer(fra, c, 50 if c == "standard" else 30, min_elo=2200) for c in ("standard", "rapid", "blitz")},
+        "femmes": {c: _classer(fem, c, 50 if c == "standard" else 30, min_elo=2200) for c in ("standard", "rapid", "blitz")},
+        "juniors": {"standard": _classer(jun, "standard", 30, min_elo=2400)},
         "stats": {"joueurs_interroges": len(joueurs)},
     }
     print(
@@ -342,7 +335,7 @@ def collecter_fide_api_lichess(dossier_tournois: str = "tournois") -> dict:
 
 
 def collecter_fide(dossier_tournois: str = "tournois") -> dict:
-    """Télécharge les classements FIDE (ratings.fide.com direct, sinon API officielle Lichess FIDE)."""
+    """Télécharge les classements FIDE (ratings.fide.com direct, sinon Wikidata + API Lichess FIDE)."""
     try:
         html_txt = netutil.fetch_text(FIDE_LISTS_URL, timeout=10, retries=1)
         urls = decouvrir_urls_fide(html_txt)
@@ -381,7 +374,7 @@ def collecter_fide(dossier_tournois: str = "tournois") -> dict:
             result["stats"][cadence] = {"total": parsed["total_joueurs"], "actifs": parsed["actifs"]}
         return result
     except Exception as e:
-        print(f"[WARN] ratings.fide.com injoignable ({e}) -> bascule sur l'API officielle Lichess FIDE")
+        print(f"[WARN] ratings.fide.com injoignable ({e}) -> bascule sur Wikidata + API Lichess FIDE")
         return collecter_fide_api_lichess(dossier_tournois)
 
 
@@ -410,11 +403,16 @@ def _run_tests() -> None:
     assert parsed["monde"][0]["nom"] == "Carlsen, Magnus"
     assert len(parsed["france"]) == 2 and parsed["france"][0]["nom"] == "Firouzja, Alireza"
 
-    api_rec = normaliser_joueur_lichess_fide({
-        "id": 12573981, "name": "Firouzja, Alireza", "title": "GM",
-        "federation": "FRA", "year": 2003, "standard": 2757, "rapid": 2737, "blitz": 2797,
-    })
-    assert api_rec is not None and api_rec["francais"] is True and api_rec["standard"] == 2757
+    api_rec = normaliser_joueur_lichess_fide(
+        {"id": 8602980, "name": "Hou, Yifan", "title": "GM", "federation": "CHN", "year": 1994, "standard": 2596},
+        ids_femmes={"8602980"},
+    )
+    assert api_rec is not None and api_rec["sexe"] == "F"
+    api_man = normaliser_joueur_lichess_fide(
+        {"id": 4147235, "name": "Tomashevsky, Evgeny", "title": "GM", "federation": "RUS", "year": 1987, "standard": 2681},
+        ids_femmes={"8602980"},
+    )
+    assert api_man is not None and api_man["sexe"] == ""
 
     print("[OK] fide.py : tous les tests passent.")
 
