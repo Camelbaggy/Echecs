@@ -49,4 +49,5 @@ jobs:
           python3 run_pipeline.py $ARGS
 
       - name: Publier les données
-        run: bash .github/scripts/publier.sh "chore: mise à jour des tournois OTB" tournois joueurs
+        run: |
+          bash .github/scripts/publier.sh "chore: mise à jour des tournois OTB" tournois joueurs

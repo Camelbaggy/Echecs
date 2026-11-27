@@ -27,4 +27,5 @@ jobs:
         run: python3 run_pipeline.py --joueurs
 
       - name: Publier les fiches joueurs
-        run: bash .github/scripts/publier.sh "chore: mise à jour des fiches joueurs" joueurs
+        run: |
+          bash .github/scripts/publier.sh "chore: mise à jour des fiches joueurs" joueurs

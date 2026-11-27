@@ -27,4 +27,5 @@ jobs:
         run: python3 run_pipeline.py --fide
 
       - name: Publier le classement FIDE
-        run: bash .github/scripts/publier.sh "chore: mise à jour du classement mensuel FIDE" fide
+        run: |
+          bash .github/scripts/publier.sh "chore: mise à jour du classement mensuel FIDE" fide

@@ -111,6 +111,14 @@ def normaliser_joueurs(raw_players: list[dict]) -> list[dict]:
         nom = (p.get("name") or "").strip()
         if not nom:
             continue
+        perf = p.get("performance")
+        if perf is None and isinstance(p.get("performances"), dict):
+            pm = p["performances"]
+            perf = pm.get("standard") or next(iter(pm.values()), None)
+        diff_elo = p.get("ratingDiff")
+        if diff_elo is None and isinstance(p.get("ratingDiffs"), dict):
+            dm = p["ratingDiffs"]
+            diff_elo = dm.get("standard") if "standard" in dm else next(iter(dm.values()), None)
         rec: dict = {
             "nom": nom,
             "fide_id": fide_id,
@@ -122,8 +130,8 @@ def normaliser_joueurs(raw_players: list[dict]) -> list[dict]:
             "elo": p.get("rating"),
             "score": p.get("score"),
             "jouees": p.get("played", 0),
-            "perf": p.get("performance"),
-            "diff_elo": p.get("ratingDiff"),
+            "perf": perf,
+            "diff_elo": diff_elo,
         }
         if p.get("rank") is not None:
             rec["rang"] = p["rank"]
