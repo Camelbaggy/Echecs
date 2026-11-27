@@ -347,14 +347,20 @@ def construire_parties_ronde(
     return parties
 
 
-def fetch_top_broadcasts(pages: int = 2) -> list[dict]:
+def fetch_top_broadcasts(pages: int = 10) -> list[dict]:
     """Récupère les tournois actifs, à venir et récents depuis /api/broadcast/top."""
     seen: set[str] = set()
     result: list[dict] = []
     for page in range(1, pages + 1):
-        data = netutil.fetch_json(f"{API_BASE}/api/broadcast/top?page={page}", min_interval=0.6)
+        try:
+            data = netutil.fetch_json(f"{API_BASE}/api/broadcast/top?page={page}", min_interval=0.6)
+        except Exception as e:
+            if page > 1:
+                print(f"[LICHESS] Fin de pagination /api/broadcast/top à la page {page} ({e}).")
+                break
+            raise
         if not isinstance(data, dict):
-            continue
+            break
         sections = []
         if page == 1:
             sections.extend(("actif", item) for item in data.get("active", []))
@@ -371,6 +377,9 @@ def fetch_top_broadcasts(pages: int = 2) -> list[dict]:
             seen.add(tid)
             if est_tournoi_majeur_otb(tour):
                 result.append({"etat": etat, "tour": tour, "round": item.get("round")})
+
+        if not isinstance(past, dict) or not past.get("nextPage"):
+            break
     return result
 
 
