@@ -131,13 +131,27 @@ def executer_tournois(
     fichier_fide: str = os.path.join(DOSSIER_FIDE, "classement.json"),
     dossier_joueurs: str = DOSSIER_JOUEURS,
     *,
-    max_tournois: int = 12,
-    sf_budget: int = 20,
+    max_tournois: int = 25,
+    sf_budget: int = 15,
     sans_ia: bool = False,
 ) -> None:
     os.makedirs(dossier_tournois, exist_ok=True)
-    candidats = lichess.fetch_top_broadcasts(pages=2)
-    print(f"[LICHESS] {len(candidats)} tournois OTB majeurs détectés.")
+
+    # Purger les anciens tournois hors périmètre (ex. ligues étrangères ou cadets collectés avant affinage)
+    for path in sorted(glob.glob(os.path.join(dossier_tournois, "*.json"))):
+        if os.path.basename(path) == "index.json":
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as fp:
+                old_t = json.load(fp)
+            if not lichess.est_tournoi_majeur_otb({"name": old_t.get("nom", ""), "info": {"location": old_t.get("lieu", "")}}):
+                os.remove(path)
+                print(f"[NETTOYAGE] Tournoi hors périmètre retiré : {old_t.get('nom', path)}")
+        except Exception:
+            pass
+
+    candidats = lichess.fetch_top_broadcasts(pages=10)
+    print(f"[LICHESS] {len(candidats)} tournois OTB majeurs détectés (actifs, à venir et passés).")
 
     budget_sf = [sf_budget]
     traites = 0

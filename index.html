@@ -421,6 +421,7 @@
       fideCat: 'monde', // monde | france | femmes | juniors
       fideCad: 'standard', // standard | rapid | blitz
       fideQuery: '',
+      accueilCat: 'tous', // tous | en_cours | fide | super | europe | france
       liveTournois: [],
       gameCtx: null, // { partie, tournoi, plyIdx, flipped, tab, boards }
       zTop: 80,
@@ -434,14 +435,14 @@
     const CAT_LABELS = {
       fide: 'Cycles FIDE',
       super: 'Super-tournois',
-      france: 'France & Europe',
-      autres: 'Autres tournois OTB',
+      europe: 'Europe',
+      france: 'France',
     };
     const CAT_COLORS = {
       fide: 'var(--accent-fide)',
       super: 'var(--accent-super)',
+      europe: 'var(--accent-autres)',
       france: 'var(--accent-france)',
-      autres: 'var(--accent-autres)',
     };
 
     const $ = (id) => document.getElementById(id);
@@ -883,13 +884,21 @@
       } catch (_) {}
     }
 
+    function estLiveMajeur(item) {
+      const nom = (item?.tour?.name || '').toLowerCase();
+      const loc = (item?.tour?.info?.location || '').toLowerCase();
+      if (loc === 'online' || loc === 'internet') return false;
+      if (/ladder legends|titled |lichess|online|cadet|junior|youth|u12|o12|bundesliga|ekipno|division de honor|chinese chess league/.test(nom)) return false;
+      return (item?.tour?.tier || 0) >= 4;
+    }
+
     async function checkLiveLichess() {
       if (document.hidden) return;
       try {
         const r = await fetch('https://lichess.org/api/broadcast/top?page=1');
         if (!r.ok) return;
         const d = await r.json();
-        const active = (d.active || []).filter((x) => (x.tour?.tier || 0) >= 4);
+        const active = (d.active || []).filter(estLiveMajeur);
         STATE.liveTournois = active;
         const pill = $('live-pill');
         if (active.length) {
@@ -1023,28 +1032,57 @@
         }
       }
 
-      // 3. Tournois OTB majeurs
+      // 3. Tournois OTB majeurs (filtrables par catégorie + groupés par statut)
       html += `<div class="sec-head"><div class="sec-title">Tournois OTB majeurs</div></div>`;
-      if (!tournois.length) {
-        html += `<div class="empty-msg">Aucun tournoi collecté pour le moment.</div>`;
+      const filtres = [
+        ['tous', 'Tous'],
+        ['en_cours', 'En cours'],
+        ['fide', 'Cycles FIDE'],
+        ['super', 'Super-tournois'],
+        ['europe', 'Europe'],
+        ['france', 'France'],
+      ];
+      html += `<div class="seg-bar">${filtres.map(([k, l]) => `<button class="seg-btn ${STATE.accueilCat === k ? 'active' : ''}" data-acat="${k}">${l}</button>`).join('')}</div>`;
+
+      const filtresList = tournois.filter((t) => {
+        if (STATE.accueilCat === 'tous') return true;
+        if (STATE.accueilCat === 'en_cours') return t.statut === 'en_cours';
+        return t.categorie === STATE.accueilCat;
+      });
+
+      const renderCardTournoi = (t) => {
+        const stLabel = t.statut === 'en_cours' ? 'En cours' : (t.statut === 'a_venir' ? 'À venir' : 'Terminé');
+        const accent = CAT_COLORS[t.categorie] || 'var(--accent-super)';
+        const catLbl = CAT_LABELS[t.categorie] || '';
+        return `<div class="card clickable" style="border-left:3px solid ${accent}" data-open-tour="${esc(t.id)}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+            <div>
+              <b style="font-size:0.94rem">${esc(t.nom)}</b>
+              <div class="game-meta" style="margin-top:2px">${catLbl ? esc(catLbl) + (t.lieu ? ' · ' : '') : ''}${esc(t.lieu || '')}${t.debut ? ' · ' + esc(t.debut.slice(0, 7)) : ''}</div>
+            </div>
+            <span class="statut-badge ${esc(t.statut)}">${stLabel}</span>
+          </div>
+          <div class="focus-pills" style="margin-top:8px">
+            ${t.ronde_courante ? `<span class="mini-pill"><b>${esc(t.ronde_courante)}</b> (${t.rondes_finies}/${t.nb_rondes})</span>` : ''}
+            ${t.leader ? `<span class="mini-pill">${t.statut === 'termine' ? 'Vainqueur' : 'Leader'} : ${flagHtml(t.leader.drapeau)} <b>${esc(nomAffiche(t.leader.nom))}</b> (${t.leader.score})</span>` : ''}
+            ${t.nb_francais ? `<span class="mini-pill">${flagHtml('fr')} <b>${t.nb_francais}</b> FRA</span>` : ''}
+          </div>
+        </div>`;
+      };
+
+      if (!filtresList.length) {
+        html += `<div class="empty-msg">Aucun tournoi dans cette catégorie pour le moment.</div>`;
       } else {
-        for (const t of tournois) {
-          const stLabel = t.statut === 'en_cours' ? 'En cours' : (t.statut === 'a_venir' ? 'À venir' : 'Terminé');
-          const accent = CAT_COLORS[t.categorie] || 'var(--accent-super)';
-          html += `<div class="card clickable" style="border-left:3px solid ${accent}" data-open-tour="${esc(t.id)}">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-              <div>
-                <b style="font-size:0.94rem">${esc(t.nom)}</b>
-                <div class="game-meta" style="margin-top:2px">${esc(t.lieu || '')}${t.cadence ? ' · ' + esc(t.cadence) : ''}</div>
-              </div>
-              <span class="statut-badge ${esc(t.statut)}">${stLabel}</span>
-            </div>
-            <div class="focus-pills" style="margin-top:8px">
-              ${t.ronde_courante ? `<span class="mini-pill"><b>${esc(t.ronde_courante)}</b> (${t.rondes_finies}/${t.nb_rondes})</span>` : ''}
-              ${t.leader ? `<span class="mini-pill">Leader : ${flagHtml(t.leader.drapeau)} <b>${esc(nomAffiche(t.leader.nom))}</b> (${t.leader.score})</span>` : ''}
-              ${t.nb_francais ? `<span class="mini-pill">${flagHtml('fr')} <b>${t.nb_francais}</b> FRA</span>` : ''}
-            </div>
-          </div>`;
+        const groupes = [
+          ['En cours', filtresList.filter((t) => t.statut === 'en_cours')],
+          ['Terminés récents', filtresList.filter((t) => t.statut === 'termine')],
+          ['À venir', filtresList.filter((t) => t.statut === 'a_venir')],
+        ];
+        const multiGroupes = groupes.filter(([, g]) => g.length > 0).length > 1;
+        for (const [titreG, g] of groupes) {
+          if (!g.length) continue;
+          if (multiGroupes) html += `<div class="game-meta" style="margin:10px 2px 6px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em">${titreG} (${g.length})</div>`;
+          html += g.map(renderCardTournoi).join('');
         }
       }
 
@@ -1218,15 +1256,16 @@
         <button class="menu-item" aria-current="${STATE.vue === 'accueil' ? 'true' : 'false'}" data-nav="accueil"><b>🏠 Accueil</b><span>En direct, Focus Français, tournois récents</span></button>
         <button class="menu-item" aria-current="${STATE.vue === 'fide' ? 'true' : 'false'}" data-nav="fide" style="border-left-color:var(--accent-elo)"><b>🏆 Classement FIDE mensuel</b><span>Monde · France · Femmes · Juniors</span></button>
       `;
-      for (const cat of ['fide', 'super', 'france', 'autres']) {
+      for (const cat of ['fide', 'super', 'europe', 'france']) {
         const list = tournois.filter((t) => t.categorie === cat);
         if (!list.length) continue;
-        html += `<div class="menu-sec">${CAT_LABELS[cat]}</div>`;
+        html += `<div class="menu-sec">${CAT_LABELS[cat]} (${list.length})</div>`;
         for (const t of list) {
           const active = STATE.vue === 'tournoi' && STATE.tournoiActif?.id === t.id;
+          const st = t.statut === 'en_cours' ? 'En cours' : (t.statut === 'a_venir' ? 'À venir' : 'Terminé');
           html += `<button class="menu-item" aria-current="${active ? 'true' : 'false'}" style="border-left-color:${CAT_COLORS[cat]}" data-open-tour="${esc(t.id)}">
             <b>${esc(t.nom)}</b>
-            <span>${esc(t.ronde_courante || t.statut)}${t.lieu ? ' · ' + esc(t.lieu) : ''}</span>
+            <span>${st}${t.debut ? ' · ' + esc(t.debut.slice(0, 7)) : ''}${t.lieu ? ' · ' + esc(t.lieu) : ''}</span>
           </button>`;
         }
       }
@@ -1617,6 +1656,9 @@
         syncUrl(true);
         return;
       }
+
+      const acat = ev.target.closest('[data-acat]');
+      if (acat) { STATE.accueilCat = acat.dataset.acat; renderAccueil(); return; }
 
       const fcat = ev.target.closest('[data-fcat]');
       if (fcat) { STATE.fideCat = fcat.dataset.fcat; renderFide(); return; }

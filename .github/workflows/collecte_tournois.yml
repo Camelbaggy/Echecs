@@ -7,10 +7,10 @@ on:
     inputs:
       max_tournois:
         description: "Nombre maximal de tournois à examiner"
-        default: "12"
+        default: "25"
       sf_budget:
         description: "Budget Stockfish (parties par passage)"
-        default: "20"
+        default: "15"
       sans_ia:
         description: "Désactiver Gemini (résumés déterministes)"
         type: boolean
@@ -43,7 +43,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           AI_BUDGET_SECONDS: "600"
         run: |
-          ARGS="--tournois --max ${{ inputs.max_tournois || '12' }} --sf-budget ${{ inputs.sf_budget || '20' }}"
+          ARGS="--tournois --max ${{ inputs.max_tournois || '25' }} --sf-budget ${{ inputs.sf_budget || '15' }}"
           if [ "${{ inputs.sans_ia }}" = "true" ]; then
             ARGS="$ARGS --sans-ia"
           fi

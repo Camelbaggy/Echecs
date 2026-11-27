@@ -20,58 +20,69 @@ import netutil
 import pgn
 
 API_BASE = "https://lichess.org"
-MIN_TIER = 4
 
 _MOTS_FIDE = (
-    "world championship", "championnat du monde", "candidates", "candidats",
-    "world cup", "coupe du monde", "grand swiss", "olympiad", "olympiade",
-    "world rapid", "world blitz", "fide grand prix", "fide circuit",
-    "women's world", "women's candidates", "world team",
+    "world chess championship", "world championship", "championnat du monde",
+    "candidates", "candidats", "fide world cup", "world cup", "coupe du monde",
+    "grand swiss", "chess olympiad", "olympiad", "olympiade",
+    "world rapid", "world blitz", "fide grand prix", "women's grand prix",
+    "women's world", "women's candidates", "world team championship",
 )
 _MOTS_SUPER = (
     "tata steel", "wijk aan zee", "norway chess", "sinquefield", "grand chess tour",
-    "superbet", "prague international", "grenke", "freestyle chess", "biel",
-    "dortmund", "london chess classic", "st. louis", "saint louis", "american cup",
-    "cairns cup", "uzchess", "chennai grand masters", "wr chess", "sharjah masters",
-    "qatar masters", "reykjavik open", "aeroflot", "tepe sigeman",
+    "superbet", "prague international", "prague chess", "grenke", "freestyle chess",
+    "biel", "dortmund", "london chess classic", "st. louis", "saint louis",
+    "american cup", "cairns cup", "uzchess", "chennai grand masters", "wr chess",
+    "sharjah masters", "qatar masters", "reykjavik open", "aeroflot",
+    "tepe sigeman", "us championship", "u.s. championship", "us masters",
+    "clutch chess", "naroditsky memorial",
+)
+_MOTS_EUROPE = (
+    "european individual", "european chess championship", "european women",
+    "championnat d'europe", "european team", "european club cup", "mitropa",
 )
 _MOTS_FRANCE = (
     "championnat de france", "french championship", "top 16", "top16",
-    "european individual", "european championship", "championnat d'europe",
-    "european team", "european club cup", "mitropa", "cappelle", "chartres",
+    "cappelle-la-grande", "cappelle la grande", "open de chartres",
+    "internationaux de france",
 )
-_MOTS_EN_LIGNE = (
-    "titled tuesday", "titled arena", "lichess arena", "bullet brawl",
-    "speed chess championship", "champions chess tour", "pro chess league",
-    "chess.com", "online",
+_MOTS_EXCLUS = (
+    "titled tuesday", "titled arena", "lichess", "bullet brawl", "ladder legends",
+    "speed chess", "champions chess tour", "pro chess league", "chess.com", "online",
+    "cadet", "world junior", "youth", "school", "senior", "veteran", "amateur",
+    "u8", "u10", "u12", "u14", "u16", "u18", "u20", "o12", "o10", "o08", "g12", "g10",
+    "bundesliga", "ekipno", "division de honor", "chinese chess league",
+    "croatian team", "spanish team", "german", "turkish", "indian", "serbian",
+    "polish", "czech", "romanian", "bulgarian", "hungarian", "club championship",
+    "division a", "division b", "liga ", "ekstraklasa",
 )
 
 
 def categorie_tournoi(tour: dict) -> str:
-    """Classe un tournoi en catégorie pour le menu latéral : fide | super | france | autres."""
+    """Classe un tournoi en catégorie propre : fide | super | europe | france | '' (hors périmètre)."""
     nom = netutil.normalize(tour.get("name", ""))
+    if any(m in nom for m in _MOTS_FRANCE):
+        return "france"
+    if any(m in nom for m in _MOTS_EUROPE):
+        return "europe"
     if any(m in nom for m in _MOTS_FIDE):
         return "fide"
     if any(m in nom for m in _MOTS_SUPER):
         return "super"
-    if any(m in nom for m in _MOTS_FRANCE):
-        return "france"
-    return "autres"
+    return ""
 
 
 def est_tournoi_majeur_otb(tour: dict) -> bool:
-    """Sélectionne les tournois OTB majeurs (tier >= 4 ou circuit majeur, hors tournois en ligne)."""
+    """Sélectionne uniquement les grands tournois OTB des 4 catégories (hors ligues étrangères/jeunes/en ligne)."""
     nom = netutil.normalize(tour.get("name", ""))
     info = tour.get("info") or {}
     loc = netutil.normalize(info.get("location", ""))
 
-    if any(m in nom for m in _MOTS_EN_LIGNE) or loc in ("online", "internet"):
+    if loc in ("online", "internet"):
         return False
-
-    tier = int(tour.get("tier") or 0)
-    if tier >= MIN_TIER:
-        return True
-    return categorie_tournoi(tour) in ("fide", "super", "france")
+    if any(m in nom for m in _MOTS_EXCLUS):
+        return False
+    return bool(categorie_tournoi(tour))
 
 
 def detecter_format(tour: dict, nb_joueurs: int = 0) -> str:
@@ -454,9 +465,14 @@ def collecter_tournoi(
 def _run_tests() -> None:
     assert est_tournoi_majeur_otb({"name": "Tata Steel Masters 2026", "tier": 5, "info": {"location": "Wijk aan Zee"}})
     assert est_tournoi_majeur_otb({"name": "Championnat de France 2026", "tier": 3, "info": {"location": "Vichy"}})
+    assert est_tournoi_majeur_otb({"name": "European Individual Chess Championship 2026", "tier": 4, "info": {"location": "Katowice"}})
     assert not est_tournoi_majeur_otb({"name": "Titled Tuesday Blitz", "tier": 5, "info": {"location": "Online"}})
+    assert not est_tournoi_majeur_otb({"name": "1. Bundesliga Austria 2026/2027", "tier": 4, "info": {"location": "Austria"}})
+    assert not est_tournoi_majeur_otb({"name": "FIDE World Cadet Championship 2026 | O12", "tier": 4, "info": {}})
+    assert not est_tournoi_majeur_otb({"name": "Ladder Legends by Lichess", "tier": 5, "info": {}})
     assert categorie_tournoi({"name": "FIDE World Championship 2026"}) == "fide"
     assert categorie_tournoi({"name": "Norway Chess 2026"}) == "super"
+    assert categorie_tournoi({"name": "European Team Championship 2026"}) == "europe"
     assert categorie_tournoi({"name": "Championnat de France 2026"}) == "france"
 
     joueurs = normaliser_joueurs([
