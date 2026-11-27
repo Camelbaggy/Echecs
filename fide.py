@@ -2,17 +2,19 @@
 """Collecteur du classement mensuel officiel FIDE.
 
 1. Source directe : listes XML officielles sur ratings.fide.com (Standard, Rapide, Blitz).
-2. Repli automatique : miroir officiel FIDE hébergé par Lichess (https://lichess.org/fide
-   et https://lichess.org/fide/federation/France), lorsque ratings.fide.com est injoignable
-   depuis GitHub Actions.
+2. Repli automatique : API officielle Lichess FIDE (GET /api/fide/player/{fideId}),
+   alimentée par les listes officielles FIDE mensuelles, lorsque ratings.fide.com
+   est injoignable depuis GitHub Actions.
 Produit fide/classement.json (Monde, France, Femmes, Juniors). Python 3.11 stdlib uniquement.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import html as html_lib
+import glob
 import io
+import json
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -21,13 +23,106 @@ import zipfile
 import netutil
 
 FIDE_LISTS_URL = "https://ratings.fide.com/download_lists.phtml"
-LICHESS_FIDE_BASE = "https://lichess.org/fide"
+LICHESS_FIDE_API = "https://lichess.org/api/fide/player"
 
 _TITRES_FIDE = {
     "g": "GM", "m": "IM", "f": "FM", "c": "CM",
     "wg": "WGM", "wm": "WIM", "wf": "WFM", "wc": "WCM",
     "GM": "GM", "IM": "IM", "FM": "FM", "CM": "CM",
     "WGM": "WGM", "WIM": "WIM", "WFM": "WFM", "WCM": "WCM",
+}
+
+# Socle d'identifiants FIDE officiels (Top mondial, Top France, Top femmes) complété
+# automatiquement par tous les joueurs (>= 2500 ou FRA >= 2300) vus dans tournois/*.json.
+FIDE_IDS_SOCLE: tuple[str, ...] = (
+    # Top mondial
+    "1503014",   # Carlsen, Magnus
+    "2016192",   # Nakamura, Hikaru
+    "2020009",   # Caruana, Fabiano
+    "14205483",  # Sindarov, Javokhir
+    "14204118",  # Abdusattorov, Nodirbek
+    "5202213",   # So, Wesley
+    "25059530",  # Praggnanandhaa, R
+    "12940690",  # Keymer, Vincent
+    "8603405",   # Wei, Yi
+    "12573981",  # Firouzja, Alireza (FRA)
+    "24116068",  # Giri, Anish
+    "35009192",  # Erigaisi, Arjun
+    "1170546",   # Duda, Jan-Krzysztof
+    "5000017",   # Anand, Viswanathan
+    "3503240",   # Dominguez Perez, Leinier
+    "12401137",  # Le, Quang Liem
+    "8603677",   # Ding, Liren
+    "25092340",  # Nihal Sarin
+    "12521213",  # Tabatabaei, M. Amin
+    "13300474",  # Aronian, Levon
+    "44599790",  # Erdogmus, Yagiz Kaan
+    "4168119",   # Nepomniachtchi, Ian
+    "738590",    # Rapport, Richard
+    "1039784",   # Van Foreest, Jorden
+    "4158814",   # Andreikin, Dmitry
+    "46616543",  # Gukesh, Dommaraju
+    "13401319",  # Mamedyarov, Shakhriyar
+    "623539",    # Vachier-Lagrave, Maxime (FRA)
+    "12539929",  # Maghsoodloo, Parham
+    "8603820",   # Yu, Yangyi
+    "2040506",   # Niemann, Hans
+    "309095",    # Robson, Ray
+    "2023970",   # Sevian, Samuel
+    "14109603",  # Fedoseev, Vladimir
+    "24126055",  # Esipenko, Andrey
+    "5029465",   # Vidit, Santosh Gujrathi
+    "5007003",   # Harikrishna, Pentala
+    "13400924",  # Radjabov, Teimour
+    "4126025",   # Grischuk, Alexander
+    "14102951",  # Ivanchuk, Vassily
+    "35093487",  # Murzin, Volodar
+    "30953499",  # Woodward, Andy
+    "2093596",   # Mishra, Abhimanyu
+    # Top France (FRA)
+    "36085755",  # Maurizzi, Marc'Andria
+    "629065",    # Moussard, Jules
+    "605506",    # Bacrot, Etienne
+    "12510130",  # Idani, Pouya
+    "608742",    # Fressinet, Laurent
+    "651400",    # Lagarde, Maxime
+    "616915",    # Mazé, Sébastien
+    "620475",    # Cornette, Matthieu
+    "609587",    # Edouard, Romain
+    "602558",    # Bauer, Christian
+    "605905",    # Gharamian, Tigran
+    "637262",    # Gozzoli, Yannick
+    "26067714",  # Boyer, Mahel
+    "685534",    # Degraeve, Jean-Marc
+    "617849",    # Skripchenko, Almira (F)
+    "633445",    # Guichard, Pauline (F)
+    "625205",    # Milliet, Sophie (F)
+    "626570",    # Daulyte-Cornette, Deimante (F)
+    "657107",    # Hejazipour, Mitra (F)
+    "665304",    # Savina, Anastasia (F)
+    # Top Femmes monde
+    "8602980",   # Hou, Yifan
+    "8603006",   # Ju, Wenjun
+    "8605360",   # Lei, Tingjie
+    "8603642",   # Tan, Zhongyi
+    "4164385",   # Goryachkina, Aleksandra
+    "5008123",   # Koneru, Humpy
+    "14111330",  # Muzychuk, Anna
+    "14114550",  # Muzychuk, Mariya
+    "4147235",   # Lagno, Kateryna
+    "13601903",  # Dzagnidze, Nana
+    "5018471",   # Harika, Dronavalli
+    "25006479",  # Vaishali, R
+    "35006916",  # Divya Deshmukh
+    "13708694",  # Assaubayeva, Bibisara
+    "4128125",   # Kosteniuk, Alexandra
+)
+
+_FEMMES_CONNUES: set[str] = {
+    "8602980", "8603006", "8605360", "8603642", "4164385", "5008123",
+    "14111330", "14114550", "4147235", "13601903", "5018471", "25006479",
+    "35006916", "13708694", "4128125", "617849", "633445", "625205",
+    "626570", "657107", "665304",
 }
 
 
@@ -140,127 +235,116 @@ def parser_liste_xml(xml_bytes: bytes, annee_ref: int | None = None) -> dict:
     }
 
 
-def parser_page_lichess_fide(page_html: str, *, cadence: str = "standard", fed_defaut: str = "", annee_ref: int | None = None) -> list[dict]:
-    """Extrait les joueurs d'une page HTML lichess.org/fide (miroir officiel des listes FIDE)."""
-    if annee_ref is None:
-        annee_ref = dt.datetime.now(dt.timezone.utc).year
-    rows: list[dict] = []
-    # Chaque ligne joueur dans <tbody> contient un lien /fide/<id>/... et les colonnes Classical, Rapid, Blitz, Age
-    for tr in re.findall(r"<tr\b[^>]*>(.*?)</tr>", page_html, flags=re.DOTALL | re.IGNORECASE):
-        m_id = re.search(r'href="/fide/(\d+)/[^"]*"', tr)
-        if not m_id:
+def _ids_depuis_tournois(dossier_tournois: str = "tournois") -> list[str]:
+    """Ajoute les FIDE IDs des joueurs (>= 2550 ou FRA >= 2250) présents dans les tournois collectés."""
+    extra: list[str] = []
+    for path in sorted(glob.glob(os.path.join(dossier_tournois, "*.json"))):
+        if os.path.basename(path) == "index.json":
             continue
-        fid = m_id.group(1)
-
-        # Fédération : souvent dans .../fed-webp/FRA.webp ou fed/FRA
-        m_fed = re.search(r"/fed[^/]*/([A-Z]{3})\.(?:webp|png|svg)", tr)
-        fed = m_fed.group(1) if m_fed else fed_defaut
-
-        # Titre éventuel (ex. <span class="utitle">GM</span>)
-        m_tit = re.search(r'<span[^>]*class="[^"]*utitle[^"]*"[^>]*>([^<]+)</span>', tr)
-        titre = _norm_titre(m_tit.group(1)) if m_tit else ""
-
-        # Extraire toutes les cellules <td>
-        tds = re.findall(r"<td\b[^>]*>(.*?)</td>", tr, flags=re.DOTALL | re.IGNORECASE)
-        if len(tds) < 4:
+        try:
+            with open(path, "r", encoding="utf-8") as fp:
+                t = json.load(fp)
+        except Exception:
             continue
-
-        # Nom dans la 1re cellule (retirer balises HTML, titre et nom de fédération éventuel)
-        # Lichess met le nom dans <a ...>...</a> ou <span class="name">
-        m_name = re.search(r'<a[^>]*href="/fide/\d+/[^"]*"[^>]*>(.*?)</a>', tds[0], flags=re.DOTALL)
-        raw_name = m_name.group(1) if m_name else tds[0]
-        raw_name = re.sub(r'<span[^>]*class="[^"]*utitle[^"]*"[^>]*>.*?</span>', "", raw_name, flags=re.DOTALL)
-        raw_name = re.sub(r"<[^>]+>", " ", raw_name)
-        nom = re.sub(r"\s+", " ", html_lib.unescape(raw_name)).strip()
-
-        def _int_cell(cell_html: str) -> int | None:
-            txt = re.sub(r"<[^>]+>", "", cell_html).strip()
-            return int(txt) if txt.isdigit() else None
-
-        std = _int_cell(tds[1]) if len(tds) > 1 else None
-        rpd = _int_cell(tds[2]) if len(tds) > 2 else None
-        blz = _int_cell(tds[3]) if len(tds) > 3 else None
-        age = _int_cell(tds[4]) if len(tds) > 4 else None
-
-        elo_map = {"standard": std, "rapid": rpd, "blitz": blz}
-        elo = elo_map.get(cadence)
-        if elo is None:
-            continue
-
-        rows.append({
-            "id": fid,
-            "nom": nom,
-            "fed": fed,
-            "drapeau": netutil.fide_flag(fed),
-            "francais": fed == "FRA",
-            "titre": titre,
-            "elo": elo,
-            "parties": 0,
-            "naissance": (annee_ref - age) if age is not None else None,
-            "sexe": "F" if titre.startswith("W") else "",
-        })
-    return rows
+        for j in t.get("classement", []):
+            fid = str(j.get("fide_id") or "").strip()
+            elo = j.get("elo") or 0
+            if not fid or not fid.isdigit():
+                continue
+            if elo >= 2550 or (j.get("francais") and elo >= 2250):
+                extra.append(fid)
+    return extra
 
 
-def collecter_fide_lichess() -> dict:
-    """Collecte les classements FIDE mensuels via le miroir officiel lichess.org/fide."""
-    periode = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m")
-    annee = int(periode[:4])
-
-    def _charger(base_url: str, cadence: str, pages: int, limit: int, fed_defaut: str = "") -> list[dict]:
-        seen: set[str] = set()
-        out: list[dict] = []
-        for p in range(1, pages + 1):
-            sep = "&" if "?" in base_url else "?"
-            url = f"{base_url}{sep}page={p}&order={cadence}"
-            html_txt = netutil.fetch_text(url, min_interval=0.8, timeout=25)
-            parsed = parser_page_lichess_fide(html_txt, cadence=cadence, fed_defaut=fed_defaut, annee_ref=annee)
-            if not parsed:
-                break
-            for row in parsed:
-                if row["id"] in seen:
-                    continue
-                seen.add(row["id"])
-                out.append(row)
-                if len(out) >= limit:
-                    break
-            if len(out) >= limit:
-                break
-        for idx, row in enumerate(out, 1):
-            row["rang"] = idx
-        return out
-
-    print("[FIDE] Repli sur le miroir officiel Lichess (lichess.org/fide)…")
-    monde_std = _charger(LICHESS_FIDE_BASE, "standard", pages=4, limit=100)
-    monde_rpd = _charger(LICHESS_FIDE_BASE, "rapid", pages=2, limit=50)
-    monde_blz = _charger(LICHESS_FIDE_BASE, "blitz", pages=2, limit=50)
-
-    fra_base = f"{LICHESS_FIDE_BASE}/federation/France"
-    fra_std = _charger(fra_base, "standard", pages=2, limit=50, fed_defaut="FRA")
-    fra_rpd = _charger(fra_base, "rapid", pages=1, limit=30, fed_defaut="FRA")
-    fra_blz = _charger(fra_base, "blitz", pages=1, limit=30, fed_defaut="FRA")
-
-    juniors = [dict(r) for r in monde_std if r.get("naissance") and (annee - r["naissance"]) <= 20]
-    for idx, r in enumerate(juniors, 1):
-        r["rang"] = idx
-
-    print(f"[FIDE/Lichess] Monde STD={len(monde_std)}, France STD={len(fra_std)}, Juniors={len(juniors)}")
+def normaliser_joueur_lichess_fide(raw: dict) -> dict | None:
+    """Normalise une réponse de GET /api/fide/player/{id}."""
+    fid = str(raw.get("id") or "").strip()
+    nom = (raw.get("name") or "").strip()
+    if not fid or not nom:
+        return None
+    fed = (raw.get("federation") or "").strip().upper()
+    titre = _norm_titre(raw.get("title") or "")
+    sexe = "F" if (titre.startswith("W") or fid in _FEMMES_CONNUES) else ""
     return {
-        "periode": periode,
-        "source": "FIDE (via Lichess)",
-        "maj": netutil.utc_now_iso(),
-        "monde": {"standard": monde_std, "rapid": monde_rpd, "blitz": monde_blz},
-        "femmes": {"standard": [], "rapid": [], "blitz": []},
-        "france": {"standard": fra_std, "rapid": fra_rpd, "blitz": fra_blz},
-        "juniors": {"standard": juniors},
-        "stats": {},
+        "id": fid,
+        "nom": nom,
+        "fed": fed,
+        "drapeau": netutil.fide_flag(fed),
+        "francais": fed == "FRA",
+        "titre": titre,
+        "standard": raw.get("standard"),
+        "rapid": raw.get("rapid"),
+        "blitz": raw.get("blitz"),
+        "naissance": raw.get("year"),
+        "sexe": sexe,
     }
 
 
-def collecter_fide() -> dict:
-    """Télécharge les classements FIDE (ratings.fide.com direct, sinon miroir lichess.org/fide)."""
+def collecter_fide_api_lichess(dossier_tournois: str = "tournois") -> dict:
+    """Interroge l'API officielle Lichess FIDE (/api/fide/player/{id}) pour bâtir le classement."""
+    periode = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m")
+    annee = int(periode[:4])
+
+    ids = list(dict.fromkeys(list(FIDE_IDS_SOCLE) + _ids_depuis_tournois(dossier_tournois)))
+    print(f"[FIDE/Lichess API] Interrogation de {len(ids)} joueurs via /api/fide/player/{{id}}…")
+
+    joueurs: list[dict] = []
+    for fid in ids:
+        try:
+            raw = netutil.fetch_json(f"{LICHESS_FIDE_API}/{fid}", min_interval=0.25, timeout=15, retries=2)
+            if isinstance(raw, dict):
+                rec = normaliser_joueur_lichess_fide(raw)
+                if rec:
+                    joueurs.append(rec)
+        except Exception as e:
+            print(f"[WARN] FIDE ID {fid} : {e}")
+
+    def _classer(subset: list[dict], cad: str, limit: int) -> list[dict]:
+        cands = [j for j in subset if isinstance(j.get(cad), int)]
+        cands.sort(key=lambda x: (-x[cad], x["nom"]))
+        out = []
+        for idx, j in enumerate(cands[:limit], 1):
+            out.append({
+                "rang": idx,
+                "id": j["id"],
+                "nom": j["nom"],
+                "fed": j["fed"],
+                "drapeau": j["drapeau"],
+                "francais": j["francais"],
+                "titre": j["titre"],
+                "elo": j[cad],
+                "parties": 0,
+                "naissance": j["naissance"],
+                "sexe": j["sexe"],
+            })
+        return out
+
+    fra = [j for j in joueurs if j["francais"]]
+    fem = [j for j in joueurs if j["sexe"] == "F"]
+    jun = [j for j in joueurs if j.get("naissance") and (annee - j["naissance"]) <= 20]
+
+    res = {
+        "periode": periode,
+        "source": "FIDE (API Lichess)",
+        "maj": netutil.utc_now_iso(),
+        "monde": {c: _classer(joueurs, c, 100 if c == "standard" else 50) for c in ("standard", "rapid", "blitz")},
+        "france": {c: _classer(fra, c, 50 if c == "standard" else 30) for c in ("standard", "rapid", "blitz")},
+        "femmes": {c: _classer(fem, c, 50 if c == "standard" else 30) for c in ("standard", "rapid", "blitz")},
+        "juniors": {"standard": _classer(jun, "standard", 30)},
+        "stats": {"joueurs_interroges": len(joueurs)},
+    }
+    print(
+        f"[FIDE/Lichess API] {len(joueurs)} joueurs lus : "
+        f"Monde={len(res['monde']['standard'])}, France={len(res['france']['standard'])}, "
+        f"Femmes={len(res['femmes']['standard'])}, Juniors={len(res['juniors']['standard'])}"
+    )
+    return res
+
+
+def collecter_fide(dossier_tournois: str = "tournois") -> dict:
+    """Télécharge les classements FIDE (ratings.fide.com direct, sinon API officielle Lichess FIDE)."""
     try:
-        html_txt = netutil.fetch_text(FIDE_LISTS_URL, timeout=12, retries=1)
+        html_txt = netutil.fetch_text(FIDE_LISTS_URL, timeout=10, retries=1)
         urls = decouvrir_urls_fide(html_txt)
         if not urls:
             raise RuntimeError("Aucun lien ZIP XML FIDE trouvé")
@@ -297,8 +381,8 @@ def collecter_fide() -> dict:
             result["stats"][cadence] = {"total": parsed["total_joueurs"], "actifs": parsed["actifs"]}
         return result
     except Exception as e:
-        print(f"[WARN] ratings.fide.com injoignable ({e}) -> bascule sur lichess.org/fide")
-        return collecter_fide_lichess()
+        print(f"[WARN] ratings.fide.com injoignable ({e}) -> bascule sur l'API officielle Lichess FIDE")
+        return collecter_fide_api_lichess(dossier_tournois)
 
 
 def _run_tests() -> None:
@@ -326,16 +410,11 @@ def _run_tests() -> None:
     assert parsed["monde"][0]["nom"] == "Carlsen, Magnus"
     assert len(parsed["france"]) == 2 and parsed["france"][0]["nom"] == "Firouzja, Alireza"
 
-    lichess_html = """
-    <table><tbody>
-      <tr>
-        <td><a href="/fide/12573981/Firouzja_Alireza"><span class="utitle">GM</span> Firouzja, Alireza</a><img src="/assets/fide/fed-webp/FRA.webp"></td>
-        <td>2757</td><td>2737</td><td>2797</td><td>23</td>
-      </tr>
-    </tbody></table>
-    """
-    lp = parser_page_lichess_fide(lichess_html, cadence="standard", annee_ref=2026)
-    assert len(lp) == 1 and lp[0]["id"] == "12573981" and lp[0]["fed"] == "FRA" and lp[0]["elo"] == 2757 and lp[0]["naissance"] == 2003
+    api_rec = normaliser_joueur_lichess_fide({
+        "id": 12573981, "name": "Firouzja, Alireza", "title": "GM",
+        "federation": "FRA", "year": 2003, "standard": 2757, "rapid": 2737, "blitz": 2797,
+    })
+    assert api_rec is not None and api_rec["francais"] is True and api_rec["standard"] == 2757
 
     print("[OK] fide.py : tous les tests passent.")
 

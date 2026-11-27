@@ -39,6 +39,7 @@ jobs:
 
       - name: Collecter les tournois OTB majeurs
         env:
+          PYTHONUNBUFFERED: "1"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           AI_BUDGET_SECONDS: "600"
         run: |

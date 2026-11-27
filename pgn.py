@@ -320,6 +320,9 @@ def _tokenize_movetext(movetext: str) -> list[tuple[str, str]]:
                 tokens[-1] = (prev_san, (prev_c + " " + comment).strip())
             i = end + 1
             continue
+        if ch == "}":
+            i += 1
+            continue
         if ch == ";":
             end = movetext.find("\n", i + 1)
             i = n if end == -1 else end + 1
@@ -329,6 +332,9 @@ def _tokenize_movetext(movetext: str) -> list[tuple[str, str]]:
         j = i
         while j < n and not movetext[j].isspace() and movetext[j] not in "(){}":
             j += 1
+        if j == i:
+            i += 1
+            continue
         word = movetext[i:j]
         i = j
 
