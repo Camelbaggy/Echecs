@@ -19,6 +19,7 @@ import sys
 import agents_flash
 import analyse
 import fide
+import historique
 import joueurs
 import lichess
 import netutil
@@ -26,6 +27,7 @@ import netutil
 DOSSIER_TOURNOIS = "tournois"
 DOSSIER_FIDE = "fide"
 DOSSIER_JOUEURS = "joueurs"
+DOSSIER_HISTORIQUE = "historique"
 
 
 def reindexer_tournois(dossier_tournois: str = DOSSIER_TOURNOIS) -> dict:
@@ -100,10 +102,8 @@ def reindexer_tournois(dossier_tournois: str = DOSSIER_TOURNOIS) -> dict:
             "maj": t.get("maj", ""),
         })
 
-    ordre_statut = {"en_cours": 0, "a_venir": 1, "termine": 2}
-    lignes.sort(key=lambda x: (ordre_statut.get(x["statut"], 9), -(x["tier"] or 0), x["debut"]), reverse=False)
-    # Pour les terminés, trier par date de fin/début décroissante
     en_cours = [x for x in lignes if x["statut"] == "en_cours"]
+    en_cours.sort(key=lambda x: (-(x["tier"] or 0), x["debut"]))
     a_venir = sorted([x for x in lignes if x["statut"] == "a_venir"], key=lambda x: x["debut"])
     termines = sorted([x for x in lignes if x["statut"] == "termine"], key=lambda x: (x["fin"] or x["debut"]), reverse=True)
     index = {"maj": netutil.utc_now_iso(), "tournois": en_cours + termines + a_venir}
@@ -111,33 +111,18 @@ def reindexer_tournois(dossier_tournois: str = DOSSIER_TOURNOIS) -> dict:
     return index
 
 
-def _fusionner_resumes_existants(ancien: dict, nouveau: dict) -> None:
-    """Conserve les résumés Gemini déjà générés pour les parties inchangées."""
-    anciens_resumes: dict[str, tuple[str, str]] = {}
-    for r in ancien.get("rondes", []):
-        for p in r.get("parties", []):
-            if p.get("resume") and p.get("resume_source") == "gemini":
-                anciens_resumes[p["id"]] = (p["resume"], p["resume_source"])
-    if not anciens_resumes:
-        return
-    for r in nouveau.get("rondes", []):
-        for p in r.get("parties", []):
-            if p["id"] in anciens_resumes and not p.get("resume"):
-                p["resume"], p["resume_source"] = anciens_resumes[p["id"]]
-
-
 def executer_tournois(
     dossier_tournois: str = DOSSIER_TOURNOIS,
     fichier_fide: str = os.path.join(DOSSIER_FIDE, "classement.json"),
     dossier_joueurs: str = DOSSIER_JOUEURS,
+    dossier_historique: str = DOSSIER_HISTORIQUE,
     *,
     max_tournois: int = 25,
     sf_budget: int = 15,
-    sans_ia: bool = False,
 ) -> None:
     os.makedirs(dossier_tournois, exist_ok=True)
 
-    # Purger les anciens tournois hors périmètre (ex. ligues étrangères ou cadets collectés avant affinage)
+    # Purger les anciens tournois hors périmètre (ex. ligues étrangères ou cadets)
     for path in sorted(glob.glob(os.path.join(dossier_tournois, "*.json"))):
         if os.path.basename(path) == "index.json":
             continue
@@ -155,7 +140,7 @@ def executer_tournois(
 
     budget_sf = [sf_budget]
     traites = 0
-    with analyse.StockfishRunner(depth=14) as sf:
+    with analyse.StockfishRunner(depth=12) as sf:
         if sf.available:
             print(f"[STOCKFISH] Actif ({sf.version}), budget {sf_budget} parties.")
         else:
@@ -173,7 +158,6 @@ def executer_tournois(
                 except Exception:
                     ancien = None
 
-            # Ne pas recollecter un tournoi déjà entièrement terminé et enregistré
             if ancien and ancien.get("statut") == "termine" and item["etat"] == "passe":
                 continue
 
@@ -184,23 +168,87 @@ def executer_tournois(
                 print(f"[WARN] Échec collecte {tid} : {e}")
                 continue
 
-            if ancien:
-                _fusionner_resumes_existants(ancien, t)
-            if sans_ia:
-                os.environ["AI_BUDGET_SECONDS"] = "0"
-            agents_flash.enrichir_resumes_tournoi(t, max_gemini=8)
+            agents_flash.enrichir_resumes_tournoi(t)
             netutil.save_json_if_changed(path, t)
             traites += 1
 
     idx = reindexer_tournois(dossier_tournois)
     print(f"[INDEX] {len(idx['tournois'])} tournois indexés ({traites} mis à jour).")
+    if os.path.isdir(os.path.join(dossier_historique, "t")):
+        historique.reindexer_historique(dossier_historique, dossier_tournois)
 
-    # Mise à jour incrémentale des fiches joueurs (sans bloquer)
     try:
-        j_idx = joueurs.construire_fiches(dossier_tournois, fichier_fide, dossier_joueurs, avec_wiki=False)
+        j_idx = joueurs.construire_fiches(
+            dossier_tournois, fichier_fide, dossier_joueurs,
+            dossier_historique=dossier_historique, avec_wiki=False,
+        )
         print(f"[JOUEURS] {len(j_idx['joueurs'])} fiches mises à jour.")
     except Exception as e:
         print(f"[WARN] Fiches joueurs : {e}")
+
+
+def executer_saison(
+    annee: int,
+    dossier_tournois: str = DOSSIER_TOURNOIS,
+    dossier_historique: str = DOSSIER_HISTORIQUE,
+    *,
+    max_tournois: int = 20,
+    sf_budget: int = 0,
+) -> None:
+    """Collecte les parties PGN complètes des grands tournois manquants de la saison donnée."""
+    os.makedirs(dossier_tournois, exist_ok=True)
+    editions = historique.lister_ids_saison(annee, dossier_historique, max_ids=max_tournois * 2)
+    manquants = [e for e in editions if not os.path.exists(os.path.join(dossier_tournois, f"{e['id']}.json"))]
+    print(f"[SAISON {annee}] {len(manquants)} éditions majeures sans parties complètes (max {max_tournois}).")
+
+    budget_sf = [sf_budget]
+    traites = 0
+    with analyse.StockfishRunner(depth=12) as sf:
+        for ed in manquants[:max_tournois]:
+            tid = ed["id"]
+            nom = ed["nom"]
+            path = os.path.join(dossier_tournois, f"{tid}.json")
+            print(f"[SAISON {annee}] Collecte complète : {nom} ({tid})…")
+            try:
+                t = lichess.collecter_tournoi(tid, sf_runner=sf if sf_budget > 0 else None, sf_budget_parties=budget_sf)
+            except Exception as e:
+                print(f"[WARN] Échec saison {tid} : {e}")
+                continue
+            agents_flash.enrichir_resumes_tournoi(t)
+            netutil.save_json_if_changed(path, t)
+            traites += 1
+
+    reindexer_tournois(dossier_tournois)
+    historique.reindexer_historique(dossier_historique, dossier_tournois)
+    print(f"[SAISON {annee}] {traites} tournois ajoutés dans {dossier_tournois}/.")
+
+
+def executer_historique_pipeline(
+    dossier_historique: str = DOSSIER_HISTORIQUE,
+    dossier_tournois: str = DOSSIER_TOURNOIS,
+    fichier_fide: str = os.path.join(DOSSIER_FIDE, "classement.json"),
+    dossier_joueurs: str = DOSSIER_JOUEURS,
+    *,
+    annee_min: int = 2021,
+    budget: int = 200,
+    relire: bool = False,
+    saison_complete: int | None = None,
+    max_saison: int = 18,
+) -> None:
+    historique.executer_historique(
+        dossier_historique, dossier_tournois,
+        annee_min=annee_min, budget=budget, relire=relire,
+    )
+    if saison_complete:
+        executer_saison(
+            saison_complete, dossier_tournois, dossier_historique,
+            max_tournois=max_saison, sf_budget=0,
+        )
+    j_idx = joueurs.construire_fiches(
+        dossier_tournois, fichier_fide, dossier_joueurs,
+        dossier_historique=dossier_historique, avec_wiki=False,
+    )
+    print(f"[JOUEURS] {len(j_idx['joueurs'])} fiches enrichies avec l'historique complet.")
 
 
 def executer_fide(dossier_fide: str = DOSSIER_FIDE) -> None:
@@ -215,11 +263,13 @@ def executer_joueurs(
     dossier_tournois: str = DOSSIER_TOURNOIS,
     fichier_fide: str = os.path.join(DOSSIER_FIDE, "classement.json"),
     dossier_joueurs: str = DOSSIER_JOUEURS,
+    dossier_historique: str = DOSSIER_HISTORIQUE,
     *,
     sans_wiki: bool = False,
 ) -> None:
     idx = joueurs.construire_fiches(
-        dossier_tournois, fichier_fide, dossier_joueurs, avec_wiki=not sans_wiki
+        dossier_tournois, fichier_fide, dossier_joueurs,
+        dossier_historique=dossier_historique, avec_wiki=not sans_wiki,
     )
     print(f"[JOUEURS] {len(idx['joueurs'])} fiches générées dans {dossier_joueurs}/.")
 
@@ -393,22 +443,54 @@ def generer_demo(cible: str) -> None:
         ],
         "maj": netutil.utc_now_iso(),
     }
-    os.environ["AI_BUDGET_SECONDS"] = "0"
     agents_flash.enrichir_resumes_tournoi(tournoi_demo)
     netutil.save_json_if_changed(os.path.join(dt_dir, "sinq26.json"), tournoi_demo)
     reindexer_tournois(dt_dir)
-    joueurs.construire_fiches(dt_dir, os.path.join(df_dir, "classement.json"), dj_dir, avec_wiki=False)
+
+    # 3. Historique de démonstration (2024–2026) pour les essais UI
+    dh_dir = os.path.join(cible, "historique")
+    os.makedirs(os.path.join(dh_dir, "t"), exist_ok=True)
+    ed_demo = {
+        "id": "tata25",
+        "nom": "Tata Steel Chess 2025 | Masters",
+        "categorie": "super",
+        "format": "round_robin",
+        "tier": 5,
+        "annee": 2025,
+        "statut": "termine",
+        "debut": "2025-01-18",
+        "fin": "2025-02-02",
+        "lieu": "Wijk aan Zee, Pays-Bas",
+        "cadence": "100 min + 30 s",
+        "nb_joueurs": 6,
+        "nb_francais": 2,
+        "vainqueur": {"rang": 1, "nom": "Firouzja, Alireza", "fide_id": "12573981", "fed": "FRA", "drapeau": "fr", "titre": "GM", "score": 8.5, "jouees": 13},
+        "podium": [
+            {"rang": 1, "nom": "Firouzja, Alireza", "fide_id": "12573981", "fed": "FRA", "drapeau": "fr", "titre": "GM", "score": 8.5, "jouees": 13},
+            {"rang": 2, "nom": "Carlsen, Magnus", "fide_id": "1503014", "fed": "NOR", "drapeau": "no", "titre": "GM", "score": 8.0, "jouees": 13},
+            {"rang": 3, "nom": "Gukesh, Dommaraju", "fide_id": "46616543", "fed": "IND", "drapeau": "in", "titre": "GM", "score": 7.5, "jouees": 13},
+        ],
+        "classement": joueurs_t,
+        "maj": netutil.utc_now_iso(),
+    }
+    netutil.save_json_if_changed(os.path.join(dh_dir, "t", "tata25.json"), ed_demo)
+    historique.reindexer_historique(dh_dir, dt_dir)
+    joueurs.construire_fiches(dt_dir, os.path.join(df_dir, "classement.json"), dj_dir, dossier_historique=dh_dir, avec_wiki=False)
     print(f"[DEMO] Jeu d'essai écrit dans {cible}")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Pipeline Dashboard Échecs")
-    ap.add_argument("--tournois", action="store_true", help="Collecter les tournois OTB majeurs (Lichess)")
+    ap.add_argument("--tournois", action="store_true", help="Collecter les tournois OTB majeurs récents (Lichess)")
+    ap.add_argument("--historique", action="store_true", help="Collecter l'historique multi-années des tournois majeurs")
+    ap.add_argument("--saison", type=int, default=0, help="Collecter les parties PGN complètes des tournois majeurs de cette année (ex. 2026)")
+    ap.add_argument("--annee-min", type=int, default=2021, help="Année de départ de la collecte historique (défaut: 2021)")
+    ap.add_argument("--budget-historique", type=int, default=200, help="Nombre maximal d'éditions historiques par passage")
+    ap.add_argument("--relire", action="store_true", help="Re-collecter même les éditions historiques déjà en cache")
     ap.add_argument("--fide", action="store_true", help="Mettre à jour le classement mensuel FIDE")
     ap.add_argument("--joueurs", action="store_true", help="Régénérer les fiches joueurs (+ Wikidata/Wikipédia)")
-    ap.add_argument("--max", type=int, default=12, help="Nombre maximal de tournois collectés")
+    ap.add_argument("--max", type=int, default=12, help="Nombre maximal de tournois complets collectés")
     ap.add_argument("--sf-budget", type=int, default=20, help="Budget Stockfish (parties par passage)")
-    ap.add_argument("--sans-ia", action="store_true", help="Désactiver Gemini (résumés déterministes)")
     ap.add_argument("--sans-wiki", action="store_true", help="Désactiver Wikidata/Wikipédia")
     ap.add_argument("--demo", metavar="DIR", help="Générer un jeu d'essai local dans DIR")
     args = ap.parse_args()
@@ -417,13 +499,23 @@ def main() -> int:
         generer_demo(args.demo)
         return 0
 
-    if not (args.tournois or args.fide or args.joueurs):
+    if not (args.tournois or args.historique or args.saison or args.fide or args.joueurs):
         args.tournois = True
 
     if args.fide:
         executer_fide()
+    if args.historique:
+        executer_historique_pipeline(
+            annee_min=args.annee_min,
+            budget=args.budget_historique,
+            relire=args.relire,
+            saison_complete=args.saison or None,
+            max_saison=args.max,
+        )
+    elif args.saison:
+        executer_saison(args.saison, max_tournois=args.max, sf_budget=0)
     if args.tournois:
-        executer_tournois(max_tournois=args.max, sf_budget=args.sf_budget, sans_ia=args.sans_ia)
+        executer_tournois(max_tournois=args.max, sf_budget=args.sf_budget)
     if args.joueurs:
         executer_joueurs(sans_wiki=args.sans_wiki)
     return 0

@@ -411,6 +411,7 @@
 
     const STATE = {
       indexTournois: null,
+      indexHistorique: null,
       fide: null,
       indexJoueurs: null,
       tournoiCache: new Map(),
@@ -422,6 +423,10 @@
       fideCad: 'standard', // standard | rapid | blitz
       fideQuery: '',
       accueilCat: 'tous', // tous | en_cours | fide | super | europe | france
+      accueilAnnee: 'toutes',
+      accueilShowAll: false,
+      playerActif: null,
+      playerFilter: 'tous',
       liveTournois: [],
       gameCtx: null, // { partie, tournoi, plyIdx, flipped, tab, boards }
       zTop: 80,
@@ -783,7 +788,21 @@
 
     async function loadTournoi(id) {
       if (STATE.tournoiCache.has(id)) return STATE.tournoiCache.get(id);
-      const t = await loadJson(`tournois/${id}.json`);
+      const dansComplet = (STATE.indexTournois?.tournois || []).some((x) => x.id === id);
+      const dansHist = (STATE.indexHistorique?.tournois || []).some((x) => x.id === id);
+      let t;
+      if (dansComplet || !dansHist) {
+        try {
+          t = await loadJson(`tournois/${id}.json`);
+        } catch (e) {
+          if (!dansHist) throw e;
+          t = await loadJson(`historique/t/${id}.json`);
+          t.archive = true;
+        }
+      } else {
+        t = await loadJson(`historique/t/${id}.json`);
+        t.archive = true;
+      }
       STATE.tournoiCache.set(id, t);
       return t;
     }
@@ -1032,8 +1051,38 @@
         }
       }
 
-      // 3. Tournois OTB majeurs (filtrables par catégorie + groupés par statut)
-      html += `<div class="sec-head"><div class="sec-title">Tournois OTB majeurs</div></div>`;
+      // 3. Tous les tournois majeurs du circuit (tournois complets + archives historiques fusionnés)
+      const byId = new Map();
+      for (const t of tournois) {
+        const an = t.debut && /^\d{4}/.test(t.debut) ? Number(t.debut.slice(0, 4)) : null;
+        byId.set(t.id, { ...t, annee: an, a_parties: true });
+      }
+      for (const h of (STATE.indexHistorique?.tournois || [])) {
+        if (!byId.has(h.id)) {
+          byId.set(h.id, {
+            id: h.id,
+            nom: h.nom,
+            categorie: h.categorie,
+            format: h.format,
+            tier: h.tier,
+            annee: h.annee || (h.debut && /^\d{4}/.test(h.debut) ? Number(h.debut.slice(0, 4)) : null),
+            statut: h.statut || 'termine',
+            debut: h.debut || '',
+            fin: h.fin || '',
+            lieu: h.lieu || '',
+            cadence: h.cadence || '',
+            nb_joueurs: h.nb_joueurs || 0,
+            nb_francais: h.nb_francais || 0,
+            leader: h.vainqueur || null,
+            a_parties: Boolean(h.a_parties),
+            archive: !h.a_parties,
+          });
+        }
+      }
+      const tousTournois = [...byId.values()];
+      const anneesDispo = [...new Set(tousTournois.map((t) => t.annee).filter(Boolean))].sort((a, b) => b - a);
+
+      html += `<div class="sec-head"><div class="sec-title">Tournois majeurs du circuit (${tousTournois.length}) ${infoBtn('Ensemble des grands tournois OTB du circuit (FIDE, Super-tournois, Europe, France) : tournois en cours, saison complète et archives multi-années.')}</div></div>`;
       const filtres = [
         ['tous', 'Tous'],
         ['en_cours', 'En cours'],
@@ -1043,11 +1092,16 @@
         ['france', 'France'],
       ];
       html += `<div class="seg-bar">${filtres.map(([k, l]) => `<button class="seg-btn ${STATE.accueilCat === k ? 'active' : ''}" data-acat="${k}">${l}</button>`).join('')}</div>`;
+      if (anneesDispo.length > 1) {
+        const yPills = [['toutes', 'Toutes années'], ...anneesDispo.map((y) => [String(y), String(y)])];
+        html += `<div class="seg-bar" style="margin-top:-4px">${yPills.map(([k, l]) => `<button class="seg-btn ${STATE.accueilAnnee === k ? 'active' : ''}" data-ayear="${k}">${l}</button>`).join('')}</div>`;
+      }
 
-      const filtresList = tournois.filter((t) => {
-        if (STATE.accueilCat === 'tous') return true;
-        if (STATE.accueilCat === 'en_cours') return t.statut === 'en_cours';
-        return t.categorie === STATE.accueilCat;
+      const filtresList = tousTournois.filter((t) => {
+        if (STATE.accueilCat === 'en_cours' && t.statut !== 'en_cours') return false;
+        if (STATE.accueilCat !== 'tous' && STATE.accueilCat !== 'en_cours' && t.categorie !== STATE.accueilCat) return false;
+        if (STATE.accueilAnnee !== 'toutes' && String(t.annee || '') !== STATE.accueilAnnee) return false;
+        return true;
       });
 
       const renderCardTournoi = (t) => {
@@ -1063,26 +1117,40 @@
             <span class="statut-badge ${esc(t.statut)}">${stLabel}</span>
           </div>
           <div class="focus-pills" style="margin-top:8px">
-            ${t.ronde_courante ? `<span class="mini-pill"><b>${esc(t.ronde_courante)}</b> (${t.rondes_finies}/${t.nb_rondes})</span>` : ''}
-            ${t.leader ? `<span class="mini-pill">${t.statut === 'termine' ? 'Vainqueur' : 'Leader'} : ${flagHtml(t.leader.drapeau)} <b>${esc(nomAffiche(t.leader.nom))}</b> (${t.leader.score})</span>` : ''}
+            ${t.ronde_courante ? `<span class="mini-pill"><b>${esc(t.ronde_courante)}</b> (${t.rondes_finies}/${t.nb_rondes})</span>` : (t.nb_joueurs ? `<span class="mini-pill">${t.nb_joueurs} joueurs</span>` : '')}
+            ${t.leader ? `<span class="mini-pill">${t.statut === 'termine' ? '🏆' : 'Leader'} ${flagHtml(t.leader.drapeau)} <b>${esc(nomAffiche(t.leader.nom))}</b>${t.leader.score != null ? ` (${t.leader.score})` : ''}</span>` : ''}
             ${t.nb_francais ? `<span class="mini-pill">${flagHtml('fr')} <b>${t.nb_francais}</b> FRA</span>` : ''}
           </div>
         </div>`;
       };
 
       if (!filtresList.length) {
-        html += `<div class="empty-msg">Aucun tournoi dans cette catégorie pour le moment.</div>`;
+        html += `<div class="empty-msg">Aucun tournoi dans cette sélection.</div>`;
       } else {
+        const enCours = filtresList.filter((t) => t.statut === 'en_cours')
+          .sort((a, b) => (b.tier || 0) - (a.tier || 0) || (b.debut || '').localeCompare(a.debut || ''));
+        const aVenir = filtresList.filter((t) => t.statut === 'a_venir')
+          .sort((a, b) => (a.debut || '').localeCompare(b.debut || ''));
+        const termines = filtresList.filter((t) => t.statut === 'termine')
+          .sort((a, b) => (b.debut || '').localeCompare(a.debut || '') || (b.tier || 0) - (a.tier || 0));
+
+        const limit = STATE.accueilShowAll ? termines.length : 24;
+        const terminesAffiches = termines.slice(0, limit);
+
         const groupes = [
-          ['En cours', filtresList.filter((t) => t.statut === 'en_cours')],
-          ['Terminés récents', filtresList.filter((t) => t.statut === 'termine')],
-          ['À venir', filtresList.filter((t) => t.statut === 'a_venir')],
+          ['En cours', enCours],
+          ['À venir', aVenir],
+          ['Terminés & archives', terminesAffiches, termines.length],
         ];
-        const multiGroupes = groupes.filter(([, g]) => g.length > 0).length > 1;
-        for (const [titreG, g] of groupes) {
+        const multiGroupes = groupes.filter((g) => g[1].length > 0).length > 1;
+        for (const [titreG, g, totalG] of groupes) {
           if (!g.length) continue;
-          if (multiGroupes) html += `<div class="game-meta" style="margin:10px 2px 6px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em">${titreG} (${g.length})</div>`;
+          const cnt = totalG != null ? totalG : g.length;
+          if (multiGroupes) html += `<div class="game-meta" style="margin:10px 2px 6px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em">${titreG} (${cnt})</div>`;
           html += g.map(renderCardTournoi).join('');
+        }
+        if (termines.length > limit) {
+          html += `<button type="button" class="ronde-btn" id="btn-show-all-tours" style="justify-content:center;font-weight:600;color:var(--accent-super)">Afficher les ${termines.length - limit} autres éditions du circuit</button>`;
         }
       }
 
@@ -1106,6 +1174,8 @@
       el.innerHTML = html;
       const btnFide = $('btn-voir-fide');
       if (btnFide) btnFide.onclick = () => ouvrirFide();
+      const btnMore = $('btn-show-all-tours');
+      if (btnMore) btnMore.onclick = () => { STATE.accueilShowAll = true; renderAccueil(); };
     }
 
     /* ===== RENDU TOURNOI ===== */
@@ -1119,6 +1189,7 @@
         <h1>${esc(t.nom)}</h1>
         <div class="tour-sub">
           ${t.direct ? `<span class="live-pill">En direct · maj 30 s</span>` : ''}
+          ${t.archive ? `<span class="mini-pill">Archive du circuit · Classement final</span>` : ''}
           ${t.lieu ? `<span>📍 ${esc(t.lieu)}</span>` : ''}
           ${t.cadence ? `<span>⏱ ${esc(t.cadence)}</span>` : ''}
           ${t.debut ? `<span>📅 ${esc(t.debut)}${t.fin ? ' → ' + esc(t.fin) : ''}</span>` : ''}
@@ -1175,10 +1246,10 @@
       // Classement du tournoi
       const cl = t.classement || [];
       if (cl.length) {
-        html += `<div class="sec-head"><div class="sec-title">Classement ${infoBtn('Classement officiel issu de Lichess Broadcasts. Cliquez sur un joueur pour ouvrir sa fiche.')}</div></div>
+        html += `<div class="sec-head"><div class="sec-title">Classement (${cl.length}) ${infoBtn('Classement officiel issu de Lichess Broadcasts. Cliquez sur un joueur pour ouvrir sa fiche.')}</div></div>
         <div class="tbl-wrap"><table>
           <thead><tr><th>#</th><th>Joueur</th><th class="num">Elo</th><th class="num">Pts</th><th class="num">Perf</th></tr></thead>
-          <tbody>${cl.slice(0, 50).map((j) => `<tr class="${j.fide_id ? 'clickable' : ''} ${j.francais ? 'fra-row' : ''}" ${j.fide_id ? `data-open-player="${esc(j.fide_id)}"` : ''}>
+          <tbody>${cl.slice(0, 100).map((j) => `<tr class="${j.fide_id ? 'clickable' : ''} ${j.francais ? 'fra-row' : ''}" ${j.fide_id ? `data-open-player="${esc(j.fide_id)}"` : ''}>
             <td>${j.rang}</td>
             <td><div class="name-cell">${flagHtml(j.drapeau, j.fed)}${titreHtml(j.titre)}<span>${esc(nomAffiche(j.nom))}</span></div></td>
             <td class="num">${j.elo || '—'}</td>
@@ -1503,96 +1574,158 @@
     }
 
     /* ===== FICHE JOUEUR ===== */
-    async function ouvrirJoueur(fideId) {
-      $('player-sheet-title').textContent = 'Chargement…';
-      $('player-sheet-body').innerHTML = `<div class="empty-msg">Chargement de la fiche…</div>`;
-      openSheet('player-sheet');
-      try {
-        const j = await loadJoueur(fideId);
-        $('player-sheet-title').textContent = `${j.titre ? j.titre + ' ' : ''}${nomAffiche(j.nom)}`;
-        const b = j.bilan || {};
-        const wp = j.wikipedia;
-        const wd = j.wikidata;
+    function renderPlayerSheet() {
+      const j = STATE.playerActif;
+      if (!j) return;
+      const b = j.bilan || {};
+      const wp = j.wikipedia;
+      const wd = j.wikidata;
+      const car = j.carriere || {};
+      const resAll = j.resultats_majeurs || j.tournois || [];
 
-        const photoUrl = wd?.photo_commons
-          ? wd.photo_commons.replace(/^http:\/\//, 'https://') + (wd.photo_commons.includes('Special:FilePath') && !wd.photo_commons.includes('width=') ? '?width=240' : '')
-          : '';
+      const photoUrl = wd?.photo_commons
+        ? wd.photo_commons.replace(/^http:\/\//, 'https://') + (wd.photo_commons.includes('Special:FilePath') && !wd.photo_commons.includes('width=') ? '?width=240' : '')
+        : '';
 
-        let html = `
-          <div class="card" style="display:flex;align-items:center;gap:12px">
-            ${photoUrl ? `<img class="player-photo" src="${esc(photoUrl)}" alt="${esc(nomAffiche(j.nom))}" loading="lazy" onerror="this.style.display='none'">` : ''}
-            <div style="min-width:0;flex:1">
-              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                ${flagHtml(j.drapeau, j.fed)}${titreHtml(j.titre)}<b style="font-size:1.02rem">${esc(nomAffiche(j.nom))}</b>
-              </div>
-              <div class="game-meta" style="margin-top:4px">${esc(j.pays || j.fed || '')}${j.annee_naissance ? ' · Né en ' + j.annee_naissance : ''} · ID FIDE ${esc(j.id)}</div>
-              <div class="focus-pills">
-                ${j.rangs?.monde_standard ? `<span class="mini-pill">Monde <b>#${j.rangs.monde_standard}</b></span>` : ''}
-                ${j.rangs?.france_standard ? `<span class="mini-pill">France <b>#${j.rangs.france_standard}</b></span>` : ''}
-              </div>
+      let html = `
+        <div class="card" style="display:flex;align-items:center;gap:12px">
+          ${photoUrl ? `<img class="player-photo" src="${esc(photoUrl)}" alt="${esc(nomAffiche(j.nom))}" loading="lazy" onerror="this.style.display='none'">` : ''}
+          <div style="min-width:0;flex:1">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              ${flagHtml(j.drapeau, j.fed)}${titreHtml(j.titre)}<b style="font-size:1.02rem">${esc(nomAffiche(j.nom))}</b>
+            </div>
+            <div class="game-meta" style="margin-top:4px">${esc(j.pays || j.fed || '')}${j.annee_naissance ? ' · Né en ' + j.annee_naissance : ''} · ID FIDE ${esc(j.id)}</div>
+            <div class="focus-pills">
+              ${j.rangs?.monde_standard ? `<span class="mini-pill">Monde <b>#${j.rangs.monde_standard}</b></span>` : ''}
+              ${j.rangs?.france_standard ? `<span class="mini-pill">France <b>#${j.rangs.france_standard}</b></span>` : ''}
             </div>
           </div>
+        </div>
 
-          <div class="stat-duo" style="grid-template-columns:repeat(3,1fr)">
-            <div class="stat-card"><div class="game-meta">Classique</div><div class="stat-big">${j.elo?.standard || j.elo?.tournoi || '—'}</div></div>
-            <div class="stat-card"><div class="game-meta">Rapide</div><div class="stat-big">${j.elo?.rapid || '—'}</div></div>
-            <div class="stat-card"><div class="game-meta">Blitz</div><div class="stat-big">${j.elo?.blitz || '—'}</div></div>
-          </div>
-        `;
+        <div class="stat-duo" style="grid-template-columns:repeat(3,1fr)">
+          <div class="stat-card"><div class="game-meta">Classique</div><div class="stat-big">${j.elo?.standard || j.elo?.tournoi || '—'}</div></div>
+          <div class="stat-card"><div class="game-meta">Rapide</div><div class="stat-big">${j.elo?.rapid || '—'}</div></div>
+          <div class="stat-card"><div class="game-meta">Blitz</div><div class="stat-big">${j.elo?.blitz || '—'}</div></div>
+        </div>
+      `;
 
-        if (b.parties) {
-          html += `<div class="card">
-            <div class="game-meta" style="margin-bottom:6px">Bilan dans les tournois suivis (${b.parties} parties)</div>
-            <div class="focus-pills" style="margin-top:0">
-              <span class="mini-pill"><b>${b.v}</b> V · <b>${b.n}</b> N · <b>${b.d}</b> D</span>
-              ${b.precision_moy != null ? `<span class="mini-pill">Précision moy. <b>${b.precision_moy.toFixed(1).replace('.', ',')} %</b></span>` : ''}
-            </div>
-          </div>`;
-        }
+      // Palmarès & résultats en tournois majeurs (carrière collectée)
+      if (resAll.length) {
+        html += `<div class="sec-head">
+          <div class="sec-title">Parcours en tournois majeurs (${resAll.length}) ${infoBtn('Ensemble des classements obtenus dans les tournois majeurs OTB collectés (2021–2026+). Cliquez sur un tournoi pour consulter son classement.')}</div>
+        </div>
+        <div class="stat-duo" style="grid-template-columns:repeat(4,1fr);margin-bottom:8px">
+          <div class="stat-card"><div class="game-meta">Tournois</div><div class="stat-big" style="font-size:1.1rem">${car.tournois ?? resAll.length}</div></div>
+          <div class="stat-card"><div class="game-meta">🥇 Titres</div><div class="stat-big" style="font-size:1.1rem;color:var(--accent-elo)">${car.victoires ?? 0}</div></div>
+          <div class="stat-card"><div class="game-meta">Podiums</div><div class="stat-big" style="font-size:1.1rem">${car.podiums ?? 0}</div></div>
+          <div class="stat-card"><div class="game-meta">Meilleur</div><div class="stat-big" style="font-size:1.1rem">${car.meilleur_rang ? '#' + car.meilleur_rang : '—'}</div></div>
+        </div>`;
 
-        const pal = j.palmares || [];
-        if (pal.length) {
-          html += `<div class="sec-head">
-            <div class="sec-title">🏆 Palmarès (${pal.length}) ${infoBtn('Tournois d’échecs remportés recensés sur Wikidata (propriété P1346). Liste non exhaustive.')}</div>
-          </div>
-          <div class="card" style="padding:8px 12px">
-            ${pal.slice(0, 8).map((it) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(38,50,72,0.5);font-size:0.82rem">
-              <span>${esc(it.titre)}</span>
-              <span style="color:var(--accent-elo);font-weight:700;flex:none">${it.annee || ''}</span>
-            </div>`).join('')}
-            ${pal.length > 8 ? `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.76rem;color:var(--accent-super);font-weight:600">Voir les ${pal.length - 8} autres titres</summary>
-              ${pal.slice(8).map((it) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(38,50,72,0.5);font-size:0.82rem">
-                <span>${esc(it.titre)}</span>
-                <span style="color:var(--accent-elo);font-weight:700;flex:none">${it.annee || ''}</span>
-              </div>`).join('')}
-            </details>` : ''}
-          </div>`;
-        }
-
-        if (wp?.extrait) {
-          html += `<div class="wiki-box">
-            <div>${esc(wp.extrait).replace(/\n\n/g, '<br><br>')}</div>
-            <div class="wiki-credit">Source : <a href="${esc(wp.url)}" target="_blank" rel="noopener">Wikipédia FR</a> (${esc(wp.licence || 'CC BY-SA 4.0')})</div>
-          </div>`;
-        }
-
-        if ((j.parties || []).length) {
-          html += `<div class="sec-head"><div class="sec-title">Parties récentes</div></div>`;
-          for (const p of j.parties.slice(0, 15)) {
-            const col = p.issue === 'v' ? 'var(--win)' : (p.issue === 'd' ? 'var(--loss)' : 'var(--draw)');
-            html += `<div class="card clickable" style="border-left:3px solid ${col}" data-open-game="${esc(p.tournoi_id)}|${esc(p.ronde_id)}|${esc(p.partie_id)}">
-              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-                <div style="min-width:0">
-                  <div class="player-line"><span class="p-dot ${p.couleur === 'blancs' ? 'w' : 'b'}"></span><span>vs ${flagHtml(p.adversaire_drapeau)} <b>${esc(nomAffiche(p.adversaire))}</b></span><span class="p-elo">${p.adversaire_elo || ''}</span></div>
-                  <div class="game-meta" style="margin-top:3px">${esc(p.tournoi)} · ${esc(p.ronde)}${p.precision != null ? ' · ' + p.precision.toFixed(1).replace('.', ',') + ' %' : ''}</div>
-                </div>
-                <span class="res-pill">${esc(p.resultat)}</span>
-              </div>
-            </div>`;
+        if (resAll.length > 4) {
+          const pFiltres = [
+            ['tous', 'Tous'],
+            ['podiums', 'Podiums'],
+            ['fide', 'FIDE'],
+            ['super', 'Super'],
+            ['europe', 'Europe'],
+            ['france', 'France'],
+          ].filter(([k]) => k === 'tous' || (k === 'podiums' ? resAll.some((r) => r.rang && r.rang <= 3) : resAll.some((r) => r.categorie === k)));
+          if (pFiltres.length > 1) {
+            html += `<div class="seg-bar">${pFiltres.map(([k, l]) => `<button class="seg-btn ${STATE.playerFilter === k ? 'active' : ''}" data-pfilter="${k}">${l}</button>`).join('')}</div>`;
           }
         }
 
-        $('player-sheet-body').innerHTML = html;
+        const resFiltres = resAll.filter((r) => {
+          if (STATE.playerFilter === 'tous') return true;
+          if (STATE.playerFilter === 'podiums') return r.rang && r.rang <= 3;
+          return r.categorie === STATE.playerFilter;
+        });
+
+        const medal = (rg) => rg === 1 ? '🥇' : (rg === 2 ? '🥈' : (rg === 3 ? '🥉' : (rg ? `#${rg}` : '—')));
+        html += `<div class="card" style="padding:6px 10px">
+          ${resFiltres.map((r) => {
+            const accent = CAT_COLORS[r.categorie] || 'var(--accent-super)';
+            const an = r.annee || (r.debut ? r.debut.slice(0, 4) : '');
+            return `<div class="clickable" data-open-tour="${esc(r.id)}" style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid rgba(38,50,72,0.5);border-left:3px solid ${accent};padding-left:8px">
+              <div style="min-width:34px;text-align:center;font-weight:700;font-size:0.86rem;color:${r.rang === 1 ? 'var(--accent-elo)' : 'var(--text)'}">${medal(r.rang)}</div>
+              <div style="min-width:0;flex:1">
+                <div style="font-size:0.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.nom)}</div>
+                <div class="game-meta">${an ? esc(String(an)) : ''}${r.nb_joueurs ? ` · ${r.rang ? r.rang + '/' + r.nb_joueurs : r.nb_joueurs + ' j.'}` : ''}${r.perf ? ' · Perf ' + r.perf : ''}</div>
+              </div>
+              <div style="text-align:right;flex:none;font-size:0.82rem;font-weight:700">
+                ${r.score != null ? `${r.score}${r.jouees ? `<span style="color:var(--text-muted);font-weight:400">/${r.jouees}</span>` : ''}` : ''}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>`;
+      }
+
+      if (b.parties) {
+        html += `<div class="card">
+          <div class="game-meta" style="margin-bottom:6px">Bilan parties analysées (${b.parties} parties)</div>
+          <div class="focus-pills" style="margin-top:0">
+            <span class="mini-pill"><b>${b.v}</b> V · <b>${b.n}</b> N · <b>${b.d}</b> D</span>
+            ${b.precision_moy != null ? `<span class="mini-pill">Précision moy. <b>${b.precision_moy.toFixed(1).replace('.', ',')} %</b></span>` : ''}
+          </div>
+        </div>`;
+      }
+
+      const pal = j.palmares || [];
+      if (pal.length) {
+        html += `<div class="sec-head">
+          <div class="sec-title">🏆 Titres historiques (${pal.length}) ${infoBtn('Victoires recensées sur Wikidata (propriété P1346), y compris avant 2021.')}</div>
+        </div>
+        <div class="card" style="padding:8px 12px">
+          ${pal.slice(0, 8).map((it) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(38,50,72,0.5);font-size:0.82rem">
+            <span>${esc(it.titre)}</span>
+            <span style="color:var(--accent-elo);font-weight:700;flex:none">${it.annee || ''}</span>
+          </div>`).join('')}
+          ${pal.length > 8 ? `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.76rem;color:var(--accent-super);font-weight:600">Voir les ${pal.length - 8} autres titres</summary>
+            ${pal.slice(8).map((it) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(38,50,72,0.5);font-size:0.82rem">
+              <span>${esc(it.titre)}</span>
+              <span style="color:var(--accent-elo);font-weight:700;flex:none">${it.annee || ''}</span>
+            </div>`).join('')}
+          </details>` : ''}
+        </div>`;
+      }
+
+      if (wp?.extrait) {
+        html += `<div class="wiki-box">
+          <div>${esc(wp.extrait).replace(/\n\n/g, '<br><br>')}</div>
+          <div class="wiki-credit">Source : <a href="${esc(wp.url)}" target="_blank" rel="noopener">Wikipédia FR</a> (${esc(wp.licence || 'CC BY-SA 4.0')})</div>
+        </div>`;
+      }
+
+      if ((j.parties || []).length) {
+        html += `<div class="sec-head"><div class="sec-title">Parties récentes</div></div>`;
+        for (const p of j.parties.slice(0, 15)) {
+          const col = p.issue === 'v' ? 'var(--win)' : (p.issue === 'd' ? 'var(--loss)' : 'var(--draw)');
+          html += `<div class="card clickable" style="border-left:3px solid ${col}" data-open-game="${esc(p.tournoi_id)}|${esc(p.ronde_id)}|${esc(p.partie_id)}">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <div style="min-width:0">
+                <div class="player-line"><span class="p-dot ${p.couleur === 'blancs' ? 'w' : 'b'}"></span><span>vs ${flagHtml(p.adversaire_drapeau)} <b>${esc(nomAffiche(p.adversaire))}</b></span><span class="p-elo">${p.adversaire_elo || ''}</span></div>
+                <div class="game-meta" style="margin-top:3px">${esc(p.tournoi)} · ${esc(p.ronde)}${p.precision != null ? ' · ' + p.precision.toFixed(1).replace('.', ',') + ' %' : ''}</div>
+              </div>
+              <span class="res-pill">${esc(p.resultat)}</span>
+            </div>
+          </div>`;
+        }
+      }
+
+      $('player-sheet-body').innerHTML = html;
+    }
+
+    async function ouvrirJoueur(fideId) {
+      $('player-sheet-title').textContent = 'Chargement…';
+      $('player-sheet-body').innerHTML = `<div class="empty-msg">Chargement de la fiche…</div>`;
+      STATE.playerActif = null;
+      STATE.playerFilter = 'tous';
+      openSheet('player-sheet');
+      try {
+        const j = await loadJoueur(fideId);
+        STATE.playerActif = j;
+        $('player-sheet-title').textContent = `${j.titre ? j.titre + ' ' : ''}${nomAffiche(j.nom)}`;
+        renderPlayerSheet();
       } catch (e) {
         $('player-sheet-body').innerHTML = `<div class="empty-msg">Fiche non disponible (${esc(e.message)}).</div>`;
       }
@@ -1724,7 +1857,12 @@
       }
 
       const tour = ev.target.closest('[data-open-tour]');
-      if (tour) { closeSheet('menu-modal'); ouvrirTournoi(tour.dataset.openTour); return; }
+      if (tour) {
+        closeSheet('menu-modal');
+        closeSheet('player-sheet');
+        ouvrirTournoi(tour.dataset.openTour);
+        return;
+      }
 
       const liveTour = ev.target.closest('[data-open-live]');
       if (liveTour) {
@@ -1750,7 +1888,13 @@
       }
 
       const acat = ev.target.closest('[data-acat]');
-      if (acat) { STATE.accueilCat = acat.dataset.acat; renderAccueil(); return; }
+      if (acat) { STATE.accueilCat = acat.dataset.acat; STATE.accueilShowAll = false; renderAccueil(); return; }
+
+      const ayear = ev.target.closest('[data-ayear]');
+      if (ayear) { STATE.accueilAnnee = ayear.dataset.ayear; STATE.accueilShowAll = false; renderAccueil(); return; }
+
+      const pfilter = ev.target.closest('[data-pfilter]');
+      if (pfilter) { STATE.playerFilter = pfilter.dataset.pfilter; renderPlayerSheet(); return; }
 
       const fcat = ev.target.closest('[data-fcat]');
       if (fcat) { STATE.fideCat = fcat.dataset.fcat; renderFide(); return; }
@@ -1805,11 +1949,13 @@
 
     /* ===== DÉMARRAGE ===== */
     async function boot() {
-      const [idxT, fideD] = await Promise.allSettled([
+      const [idxT, idxH, fideD] = await Promise.allSettled([
         loadJson('tournois/index.json'),
+        loadJson('historique/index.json'),
         loadJson('fide/classement.json'),
       ]);
       if (idxT.status === 'fulfilled') STATE.indexTournois = idxT.value;
+      if (idxH.status === 'fulfilled') STATE.indexHistorique = idxH.value;
       if (fideD.status === 'fulfilled') STATE.fide = fideD.value;
 
       const params = new URLSearchParams(location.search);

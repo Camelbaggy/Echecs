@@ -216,16 +216,39 @@ def interroger_wikipedia_fr(titres: list[str]) -> dict[str, dict]:
     return result
 
 
+def _variantes_nom(nom: str) -> list[str]:
+    """Retourne les formes normalisées d'un nom ('Nom, Prénom' et 'Prénom Nom')."""
+    out: list[str] = []
+    n = netutil.normalize(nom)
+    if n:
+        out.append(n)
+    if "," in nom:
+        parts = [s.strip() for s in nom.split(",", 1)]
+        if parts[0] and parts[1]:
+            inv = netutil.normalize(f"{parts[1]} {parts[0]}")
+            if inv and inv not in out:
+                out.append(inv)
+    elif " " in nom.strip():
+        parts = nom.strip().split()
+        if len(parts) == 2:
+            inv = netutil.normalize(f"{parts[1]} {parts[0]}")
+            if inv and inv not in out:
+                out.append(inv)
+    return out
+
+
 def construire_fiches(
     dossier_tournois: str,
     fichier_fide: str,
     dossier_sortie: str,
     *,
+    dossier_historique: str = "historique",
     avec_wiki: bool = True,
     max_wiki: int = 250,
 ) -> dict:
-    """Construit toutes les fiches joueurs et joueurs/index.json."""
+    """Construit toutes les fiches joueurs et joueurs/index.json (tournois + historique + FIDE + Wikidata)."""
     fiches: dict[str, dict] = {}
+    nom_vers_fid: dict[str, str] = {}
 
     def _get(fid: str, nom: str, fed: str = "", titre: str = "") -> dict:
         if fid not in fiches:
@@ -245,7 +268,9 @@ def construire_fiches(
                     "noirs": {"v": 0, "n": 0, "d": 0},
                 },
                 "_precisions": [],
+                "_resultats_map": {},
                 "tournois": [],
+                "resultats_majeurs": [],
                 "parties": [],
                 "maj": netutil.utc_now_iso(),
             }
@@ -259,9 +284,11 @@ def construire_fiches(
             f["francais"] = fed == "FRA"
         if titre and not f["titre"]:
             f["titre"] = titre
+        for v in _variantes_nom(nom):
+            nom_vers_fid.setdefault(v, fid)
         return f
 
-    # 1. Charger les classements FIDE (Top Monde + Top France)
+    # 1. Charger les classements FIDE (Top Monde + Top France + Femmes)
     if os.path.exists(fichier_fide):
         with open(fichier_fide, "r", encoding="utf-8") as fp:
             fide_data = json.load(fp)
@@ -277,14 +304,21 @@ def construire_fiches(
                     if row.get("naissance") and not f.get("annee_naissance"):
                         f["annee_naissance"] = row["naissance"]
 
-    # 2. Agréger les tournois collectés
+    # 2. Agréger les tournois collectés complets (tournois/*.json)
+    tournois_complets: set[str] = set()
     for path in sorted(glob.glob(os.path.join(dossier_tournois, "*.json"))):
         if os.path.basename(path) == "index.json":
             continue
         with open(path, "r", encoding="utf-8") as fp:
             t = json.load(fp)
         tid = t["id"]
+        tournois_complets.add(tid)
         tnom = t["nom"]
+        debut = t.get("debut", "")
+        annee = int(debut[:4]) if len(debut) >= 4 and debut[:4].isdigit() else None
+        nb_j = len(t.get("classement") or [])
+        cat = t.get("categorie", "")
+
         for j in t.get("classement", []):
             fid = j.get("fide_id", "")
             if not fid:
@@ -292,15 +326,21 @@ def construire_fiches(
             f = _get(fid, j["nom"], j.get("fed", ""), j.get("titre", ""))
             if j.get("elo") and "standard" not in f["elo"]:
                 f["elo"]["tournoi"] = j["elo"]
-            f["tournois"].append({
+            rec_t = {
                 "id": tid,
                 "nom": tnom,
-                "debut": t.get("debut", ""),
+                "categorie": cat,
+                "annee": annee,
+                "debut": debut,
                 "rang": j.get("rang"),
+                "nb_joueurs": nb_j,
                 "score": j.get("score"),
                 "jouees": j.get("jouees"),
                 "perf": j.get("perf"),
-            })
+                "a_parties": True,
+            }
+            f["tournois"].append(rec_t)
+            f["_resultats_map"][tid] = rec_t
 
         for r in t.get("rondes", []):
             for p in r.get("parties", []):
@@ -343,6 +383,51 @@ def construire_fiches(
                         "precision": prec,
                         "eco": p.get("eco", ""),
                     })
+
+    # 2b. Agréger l'historique multi-années des tournois majeurs (historique/t/*.json)
+    hist_dir = os.path.join(dossier_historique, "t") if dossier_historique else ""
+    if hist_dir and os.path.isdir(hist_dir):
+        for path in sorted(glob.glob(os.path.join(hist_dir, "*.json"))):
+            try:
+                with open(path, "r", encoding="utf-8") as fp:
+                    ed = json.load(fp)
+            except Exception:
+                continue
+            tid = ed.get("id", "")
+            if not tid:
+                continue
+            ed_nom = ed.get("nom", "")
+            debut = ed.get("debut", "")
+            annee = ed.get("annee") or (int(debut[:4]) if len(debut) >= 4 and debut[:4].isdigit() else None)
+            nb_j = ed.get("nb_joueurs") or len(ed.get("classement") or [])
+            cat = ed.get("categorie", "")
+            for j in ed.get("classement") or []:
+                fid = str(j.get("fide_id") or "").strip()
+                if not fid:
+                    for v in _variantes_nom(j.get("nom", "")):
+                        if v in nom_vers_fid:
+                            fid = nom_vers_fid[v]
+                            break
+                if not fid:
+                    continue
+                f = _get(fid, j.get("nom", ""), j.get("fed", ""), j.get("titre", ""))
+                if j.get("elo") and "standard" not in f["elo"] and "tournoi" not in f["elo"]:
+                    f["elo"]["tournoi"] = j["elo"]
+                if tid in f["_resultats_map"]:
+                    continue
+                f["_resultats_map"][tid] = {
+                    "id": tid,
+                    "nom": ed_nom,
+                    "categorie": cat,
+                    "annee": annee,
+                    "debut": debut,
+                    "rang": j.get("rang"),
+                    "nb_joueurs": nb_j,
+                    "score": j.get("score"),
+                    "jouees": j.get("jouees"),
+                    "perf": j.get("perf"),
+                    "a_parties": tid in tournois_complets,
+                }
 
     # 3. Recharger le cache Wikidata/Wikipédia/Palmarès existant et rafraîchir si besoin
     a_rafraichir_wd: list[str] = []
@@ -409,6 +494,29 @@ def construire_fiches(
         f["parties"] = f["parties"][:40]
         f["tournois"].sort(key=lambda t: t.get("debut", ""), reverse=True)
 
+        res_map = f.pop("_resultats_map", {})
+        res_list = sorted(res_map.values(), key=lambda x: (x.get("debut") or "", x.get("nom") or ""), reverse=True)
+        f["resultats_majeurs"] = res_list
+
+        # Filtrer les profils purement historiques très éloignés du haut niveau (ex. table 200 d'un open)
+        elo_ref = f["elo"].get("standard") or f["elo"].get("tournoi") or 0
+        dans_fide = bool(f["rangs"])
+        dans_saison = bool(f["tournois"] or f["parties"])
+        if not (dans_fide or dans_saison or f["francais"] or elo_ref >= 2500 or len(res_list) >= 2):
+            continue
+
+        # Statistiques déterministes de carrière sur les tournois majeurs collectés
+        rangs_valides = [r["rang"] for r in res_list if isinstance(r.get("rang"), int) and r["rang"] > 0]
+        perfs_valides = [r["perf"] for r in res_list if isinstance(r.get("perf"), (int, float)) and r["perf"] > 0]
+        f["carriere"] = {
+            "tournois": len(res_list),
+            "victoires": sum(1 for rg in rangs_valides if rg == 1),
+            "podiums": sum(1 for rg in rangs_valides if rg <= 3),
+            "top10": sum(1 for rg in rangs_valides if rg <= 10),
+            "meilleur_rang": min(rangs_valides) if rangs_valides else None,
+            "perf_moy": round(sum(perfs_valides) / len(perfs_valides)) if perfs_valides else None,
+        }
+
         netutil.save_json_if_changed(os.path.join(dossier_sortie, f"{fid}.json"), f)
         index_rows.append({
             "id": fid,
@@ -420,6 +528,9 @@ def construire_fiches(
             "elo": f["elo"].get("standard") or f["elo"].get("tournoi"),
             "rang_monde": f["rangs"].get("monde_standard"),
             "rang_france": f["rangs"].get("france_standard"),
+            "nb_majeurs": len(res_list),
+            "victoires": f["carriere"]["victoires"],
+            "podiums": f["carriere"]["podiums"],
         })
 
     index_rows.sort(key=lambda r: (-(r["elo"] or 0), r["nom"]))
@@ -433,7 +544,9 @@ def _run_tests() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         dt_dir = os.path.join(tmp, "tournois")
+        hist_t_dir = os.path.join(tmp, "historique", "t")
         os.makedirs(dt_dir)
+        os.makedirs(hist_t_dir)
         fide_p = os.path.join(tmp, "classement.json")
         out_dir = os.path.join(tmp, "joueurs")
 
@@ -444,8 +557,8 @@ def _run_tests() -> None:
             }, fp)
         with open(os.path.join(dt_dir, "tata26.json"), "w", encoding="utf-8") as fp:
             json.dump({
-                "id": "tata26", "nom": "Tata Steel 2026", "debut": "2026-01-18",
-                "classement": [{"fide_id": "12573981", "nom": "Firouzja, Alireza", "fed": "FRA", "titre": "GM", "elo": 2763, "rang": 2, "score": 8.0, "jouees": 13}],
+                "id": "tata26", "nom": "Tata Steel 2026", "categorie": "super", "debut": "2026-01-18",
+                "classement": [{"fide_id": "12573981", "nom": "Firouzja, Alireza", "fed": "FRA", "titre": "GM", "elo": 2763, "rang": 2, "score": 8.0, "jouees": 13, "perf": 2810}],
                 "rondes": [{"id": "r1", "nom": "Ronde 1", "parties": [{
                     "id": "tata26-r1-1", "date": "2026-01-18", "statut": "terminee", "resultat": "1-0", "eco": "C65",
                     "blancs": {"fide_id": "12573981", "nom": "Firouzja, Alireza", "fed": "FRA", "titre": "GM", "elo": 2763, "drapeau": "fr"},
@@ -453,13 +566,22 @@ def _run_tests() -> None:
                     "analyse": {"blancs": {"precision": 95.0}, "noirs": {"precision": 88.0}},
                 }]}],
             }, fp)
+        with open(os.path.join(hist_t_dir, "sinq24.json"), "w", encoding="utf-8") as fp:
+            json.dump({
+                "id": "sinq24", "nom": "Sinquefield Cup 2024", "categorie": "super", "annee": 2024, "debut": "2024-08-19", "nb_joueurs": 10,
+                "classement": [{"fide_id": "", "nom": "Alireza Firouzja", "fed": "FRA", "titre": "GM", "elo": 2751, "rang": 1, "score": 6.0, "jouees": 9, "perf": 2860}],
+            }, fp)
 
-        idx = construire_fiches(dt_dir, fide_p, out_dir, avec_wiki=False)
+        idx = construire_fiches(
+            dt_dir, fide_p, out_dir, dossier_historique=os.path.join(tmp, "historique"), avec_wiki=False
+        )
         assert len(idx["joueurs"]) == 2
         with open(os.path.join(out_dir, "12573981.json"), "r", encoding="utf-8") as fp:
             f = json.load(fp)
         assert f["bilan"]["v"] == 1 and f["bilan"]["precision_moy"] == 95.0
         assert f["rangs"]["france_standard"] == 1
+        assert len(f["resultats_majeurs"]) == 2
+        assert f["carriere"]["victoires"] == 1 and f["carriere"]["podiums"] == 2 and f["carriere"]["meilleur_rang"] == 1
     print("[OK] joueurs.py : tous les tests passent.")
 
 

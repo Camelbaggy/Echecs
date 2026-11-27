@@ -1,0 +1,55 @@
+name: Historique tournois majeurs
+
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      annee_min:
+        description: "Année de départ de l'historique"
+        default: "2021"
+      budget:
+        description: "Nombre maximal d'éditions historiques par passage"
+        default: "200"
+      saison:
+        description: "Collecter aussi les parties PGN complètes de cette saison (0 = non)"
+        default: "2026"
+      max_saison:
+        description: "Nombre maximal de tournois complets de la saison à ajouter"
+        default: "18"
+      relire:
+        description: "Relire même les éditions déjà en cache"
+        type: boolean
+        default: false
+
+concurrency:
+  group: historique-tournois
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  historique:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Collecter l'historique des tournois majeurs et mettre à jour les fiches
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          ARGS="--historique --annee-min ${{ inputs.annee_min || '2021' }} --budget-historique ${{ inputs.budget || '200' }} --saison ${{ inputs.saison || '2026' }} --max ${{ inputs.max_saison || '18' }}"
+          if [ "${{ inputs.relire }}" = "true" ]; then
+            ARGS="$ARGS --relire"
+          fi
+          python3 run_pipeline.py $ARGS
+
+      - name: Publier l'historique et les fiches joueurs
+        run: |
+          bash .github/scripts/publier.sh "chore: historique des tournois majeurs et palmarès joueurs" historique tournois joueurs

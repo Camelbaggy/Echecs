@@ -1,25 +1,16 @@
 #!/usr/bin/env python3
-"""Résumés factuels des parties d'échecs (Gemini Flash rédacteur + Flash-Lite contrôleur).
+"""Résumés factuels déterministes des parties d'échecs (sans appel IA).
 
-Même discipline que coupes-europe :
-- Le modèle reçoit UNIQUEMENT un dossier factuel déterministe (ouverture, coups clés,
-  précision, crise de temps, enjeu au classement) et a interdiction d'inventer des variantes.
-- Sans GEMINI_API_KEY, si AI_BUDGET_SECONDS=0, ou après 3 rejets du contrôleur :
-  repli déterministe propre en français.
+Produit un résumé en français de 2 à 4 phrases uniquement à partir des faits
+vérifiés de la partie (résultat, ouverture, coup tournant objectif, précision,
+pression à la pendule). Zéro hallucination.
 """
 
 from __future__ import annotations
 
-import json
-import os
 import sys
-import time
-import urllib.error
-import urllib.request
 
 import netutil
-
-GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
 def _nom_court(nom: str) -> str:
@@ -30,7 +21,7 @@ def _nom_court(nom: str) -> str:
 
 
 def build_game_dossier(partie: dict, tournoi: dict) -> dict:
-    """Construit le dossier factuel strict transmis au rédacteur et au contrôleur."""
+    """Construit le dossier factuel strict d'une partie."""
     b = partie["blancs"]
     n = partie["noirs"]
     ana = partie.get("analyse") or {}
@@ -128,107 +119,9 @@ def build_deterministic_summary(partie: dict, tournoi: dict) -> str:
     return " ".join(phrases)
 
 
-def _discover_models(api_key: str) -> tuple[str | None, str | None]:
-    """Découvre via ListModels un modèle Flash (rédacteur) et Flash-Lite (contrôleur)."""
-    url = f"{GEMINI_BASE}/models?key={api_key}"
-    try:
-        data = netutil.fetch_json(url, timeout=15, min_interval=0.2)
-    except Exception:
-        return None, None
-    models = data.get("models", []) if isinstance(data, dict) else []
-    gen = [
-        m["name"] for m in models
-        if "generateContent" in (m.get("supportedGenerationMethods") or [])
-    ]
-    writer = next((m for m in gen if "flash" in m and "lite" not in m and "thinking" not in m), None)
-    checker = next((m for m in gen if "flash-lite" in m), writer)
-    return writer, checker
-
-
-def _call_gemini(api_key: str, model: str, prompt: str, temperature: float = 0.25) -> str:
-    url = f"{GEMINI_BASE}/{model}:generateContent?key={api_key}"
-    payload = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": temperature, "maxOutputTokens": 450},
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=payload, headers={"Content-Type": "application/json", "User-Agent": netutil.UA}
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
-    cands = body.get("candidates") or []
-    parts = (cands[0].get("content") or {}).get("parts") or [] if cands else []
-    return "".join(p.get("text", "") for p in parts).strip()
-
-
-def resumer_partie_gemini(
-    partie: dict,
-    tournoi: dict,
-    *,
-    api_key: str,
-    writer: str,
-    checker: str,
-    deadline: float,
-) -> tuple[str, str]:
-    """Génère un résumé Gemini vérifié ; sinon repli déterministe."""
-    dossier = build_game_dossier(partie, tournoi)
-    dossier_json = json.dumps(dossier, ensure_ascii=False)
-    retour_controle = ""
-
-    for essai in range(1, 4):
-        if time.monotonic() >= deadline:
-            break
-        prompt_w = (
-            "Tu es journaliste d'échecs francophone. Rédige un résumé factuel de 3 à 4 phrases "
-            "en français de cette partie à partir UNIQUEMENT du dossier JSON ci-dessous.\n"
-            "Règles absolues : n'invente AUCUN coup, AUCUNE variante, AUCUN chiffre absent du dossier. "
-            "Mentionne le résultat, l'ouverture si présente, le tournant objectif s'il existe, et la précision si présente.\n"
-            f"{('Correction demandée par le contrôleur : ' + retour_controle + chr(10)) if retour_controle else ''}"
-            f"Dossier : {dossier_json}"
-        )
-        try:
-            texte = _call_gemini(api_key, writer, prompt_w, temperature=0.25)
-            if not texte:
-                continue
-            if time.monotonic() >= deadline:
-                break
-            prompt_c = (
-                "Tu es contrôleur factuel strict. Vérifie si chaque nom, résultat, ouverture, numéro de coup, "
-                "coup SAN et chiffre du résumé ci-dessous est STRICTEMENT présent dans le dossier JSON.\n"
-                "Réponds uniquement par 'OK' si tout est exact, sinon par 'REJET: <raison brève>'.\n"
-                f"Dossier : {dossier_json}\nRésumé : {texte}"
-            )
-            verdict = _call_gemini(api_key, checker, prompt_c, temperature=0.0)
-            if verdict.upper().startswith("OK"):
-                return texte, "gemini"
-            retour_controle = verdict
-            print(f"[IA] Rejet essai {essai}/3 ({partie['id']}) : {verdict[:120]}")
-        except urllib.error.HTTPError as e:
-            print(f"[IA] HTTP {e.code} ({partie['id']})")
-            if e.code == 429:
-                break
-        except Exception as e:
-            print(f"[IA] Erreur ({partie['id']}) : {e}")
-            break
-
-    return build_deterministic_summary(partie, tournoi), "deterministe"
-
-
-def enrichir_resumes_tournoi(tournoi: dict, *, max_gemini: int = 12) -> int:
-    """Ajoute un résumé (Gemini ou déterministe) aux parties terminées de Français et affiches majeures."""
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    budget_s = int(os.environ.get("AI_BUDGET_SECONDS", "600"))
-    use_ai = bool(api_key) and budget_s > 0
-    writer = checker = None
-    if use_ai:
-        writer, checker = _discover_models(api_key)
-        if not writer or not checker:
-            use_ai = False
-
-    deadline = time.monotonic() + max(0, budget_s)
-    gemini_used = 0
+def enrichir_resumes_tournoi(tournoi: dict) -> int:
+    """Ajoute un résumé déterministe aux parties terminées de Français et affiches majeures."""
     total_done = 0
-
     for ronde in reversed(tournoi.get("rondes", [])):
         for p in ronde.get("parties", []):
             if p.get("statut") != "terminee":
@@ -236,23 +129,9 @@ def enrichir_resumes_tournoi(tournoi: dict, *, max_gemini: int = 12) -> int:
             cible = p.get("est_francais") or (p.get("echiquier", 99) <= 2 and p.get("resultat") != "1/2-1/2")
             if not cible:
                 continue
-            if p.get("resume") and p.get("resume_source") == "gemini":
-                continue
-
-            if use_ai and gemini_used < max_gemini and time.monotonic() < deadline:
-                assert writer and checker
-                texte, src = resumer_partie_gemini(
-                    p, tournoi, api_key=api_key, writer=writer, checker=checker, deadline=deadline
-                )
-                if src == "gemini":
-                    gemini_used += 1
-            else:
-                texte, src = build_deterministic_summary(p, tournoi), "deterministe"
-
-            p["resume"] = texte
-            p["resume_source"] = src
+            p["resume"] = build_deterministic_summary(p, tournoi)
+            p["resume_source"] = "deterministe"
             total_done += 1
-
     return total_done
 
 

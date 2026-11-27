@@ -11,10 +11,6 @@ on:
       sf_budget:
         description: "Budget Stockfish (parties par passage)"
         default: "15"
-      sans_ia:
-        description: "Désactiver Gemini (résumés déterministes)"
-        type: boolean
-        default: false
 
 concurrency:
   group: collecte-tournois
@@ -40,15 +36,9 @@ jobs:
       - name: Collecter les tournois OTB majeurs
         env:
           PYTHONUNBUFFERED: "1"
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          AI_BUDGET_SECONDS: "600"
         run: |
-          ARGS="--tournois --max ${{ inputs.max_tournois || '25' }} --sf-budget ${{ inputs.sf_budget || '15' }}"
-          if [ "${{ inputs.sans_ia }}" = "true" ]; then
-            ARGS="$ARGS --sans-ia"
-          fi
-          python3 run_pipeline.py $ARGS
+          python3 run_pipeline.py --tournois --max ${{ inputs.max_tournois || '25' }} --sf-budget ${{ inputs.sf_budget || '15' }}
 
       - name: Publier les données
         run: |
-          bash .github/scripts/publier.sh "chore: mise à jour des tournois OTB" tournois joueurs
+          bash .github/scripts/publier.sh "chore: mise à jour des tournois OTB" tournois joueurs historique
