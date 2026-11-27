@@ -214,13 +214,35 @@ def construire_parties_ronde(
     joueurs: list[dict],
     sf_runner: analyse.StockfishRunner | None = None,
     sf_budget_parties: list[int] | None = None,
+    max_parties: int = 25,
 ) -> list[dict]:
-    """Parse le PGN d'une ronde et construit les fiches de partie complètes."""
+    """Parse le PGN d'une ronde (max_parties premiers échiquiers + toutes les parties FRA)."""
     by_fide, by_name = _index_joueurs(joueurs)
-    parsed = pgn.parse_pgn_games(pgn_text)
-    parties: list[dict] = []
+    fra_fide_ids = {j["fide_id"] for j in joueurs if j.get("francais") and j.get("fide_id")}
+    fra_names = {netutil.normalize(j["nom"]) for j in joueurs if j.get("francais")}
 
-    for idx, g in enumerate(parsed, 1):
+    # Pré-filtrage rapide des blocs PGN bruts avant d'exécuter le moteur SAN->UCI
+    raw_blocks = [b.strip() for b in re.split(r"\n\s*\n(?=\[Event\s)", pgn_text.strip()) if b.strip()]
+    selected_blocks: list[tuple[int, str]] = []
+    for idx, blk in enumerate(raw_blocks, 1):
+        if idx <= max_parties:
+            selected_blocks.append((idx, blk))
+            continue
+        # Au-delà de max_parties : ne garder que les parties impliquant un joueur français
+        fids = re.findall(r'^\[(?:White|Black)FideId\s+"(\d+)"\]', blk, flags=re.MULTILINE)
+        if any(f in fra_fide_ids for f in fids):
+            selected_blocks.append((idx, blk))
+            continue
+        names = re.findall(r'^\[(?:White|Black)\s+"([^"]+)"\]', blk, flags=re.MULTILINE)
+        if any(netutil.normalize(nm) in fra_names for nm in names):
+            selected_blocks.append((idx, blk))
+
+    parties: list[dict] = []
+    for idx, blk in selected_blocks:
+        parsed_one = pgn.parse_pgn_games(blk)
+        if not parsed_one:
+            continue
+        g = parsed_one[0]
         h = g["headers"]
         plies = g["plies"]
         blancs = _resoudre_joueur(

@@ -211,7 +211,7 @@ def analyser_partie(plies: list[dict], time_control: str = "") -> dict | None:
 class StockfishRunner:
     """Interface UCI légère (Python stdlib) pour évaluer les parties sans [%eval]."""
 
-    def __init__(self, depth: int = 14, threads: int = 2, hash_mb: int = 64) -> None:
+    def __init__(self, depth: int = 12, threads: int = 2, hash_mb: int = 64) -> None:
         self.path = shutil.which("stockfish")
         self.depth = depth
         self.threads = threads
@@ -264,7 +264,7 @@ class StockfishRunner:
             self.proc.stdin.write(cmd + "\n")
             self.proc.stdin.flush()
 
-    def evaluer_partie(self, plies: list[dict], max_seconds: float = 25.0) -> bool:
+    def evaluer_partie(self, plies: list[dict], max_seconds: float = 10.0) -> bool:
         """Ajoute eval/mate (point de vue Blancs) sur les plies ayant un coup UCI."""
         if not self.proc or not self.proc.stdout or not plies:
             return False
