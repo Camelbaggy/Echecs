@@ -48,8 +48,17 @@ def _couper_extrait(texte: str, cible: int = 260, maxi: int = 850) -> str:
     return res
 
 
+def _normaliser_photo_commons(url: str) -> str:
+    if not url:
+        return ""
+    u = url.replace("http://", "https://", 1)
+    if "Special:FilePath" in u and "width=" not in u:
+        u += ("&" if "?" in u else "?") + "width=240"
+    return u
+
+
 def interroger_wikidata(fide_ids: list[str]) -> dict[str, dict]:
-    """Interroge Wikidata par lots via P1440 (identifiant FIDE)."""
+    """Interroge Wikidata par lots via P1440 (identifiant FIDE) : naissance, photo Commons HTTPS, Wikipédia FR."""
     result: dict[str, dict] = {}
     for i in range(0, len(fide_ids), 80):
         lot = [fid for fid in fide_ids[i : i + 80] if fid and fid.isdigit()]
@@ -76,7 +85,7 @@ def interroger_wikidata(fide_ids: list[str]) -> dict[str, dict]:
                 url,
                 headers={"Accept": "application/sparql-results+json"},
                 min_interval=1.5,
-                timeout=30,
+                timeout=35,
             )
         except Exception as e:
             print(f"[WARN] Wikidata lot {i} : {e}")
@@ -90,7 +99,7 @@ def interroger_wikidata(fide_ids: list[str]) -> dict[str, dict]:
             dob = (r.get("dob") or {}).get("value", "")[:10]
             wp_url = (r.get("wpfr") or {}).get("value", "")
             titre_wp = urllib.parse.unquote(wp_url.rsplit("/wiki/", 1)[-1]) if "/wiki/" in wp_url else ""
-            img_url = (r.get("image") or {}).get("value", "")
+            img_url = _normaliser_photo_commons((r.get("image") or {}).get("value", ""))
             result[fid] = {
                 "qid": qid,
                 "naissance": dob if len(dob) == 10 else "",
@@ -100,6 +109,59 @@ def interroger_wikidata(fide_ids: list[str]) -> dict[str, dict]:
                 "maj": netutil.utc_now_iso(),
             }
     return result
+
+
+def interroger_palmares_wikidata(fide_ids: list[str]) -> dict[str, list[dict]]:
+    """Collecte le palmarès vérifié (tournois d'échecs remportés, P1346 + P641=Q718) via Wikidata."""
+    palmares: dict[str, list[dict]] = {}
+    for i in range(0, len(fide_ids), 60):
+        lot = [fid for fid in fide_ids[i : i + 60] if fid and fid.isdigit()]
+        if not lot:
+            continue
+        values = " ".join(f'"{fid}"' for fid in lot)
+        query = f"""
+        SELECT DISTINCT ?fide ?eventLabel ?date WHERE {{
+          VALUES ?fide {{ {values} }}
+          ?item wdt:P1440 ?fide .
+          ?event wdt:P1346 ?item ;
+                 wdt:P641 wd:Q718 .
+          OPTIONAL {{ ?event wdt:P585 ?d1 . }}
+          OPTIONAL {{ ?event wdt:P580 ?d2 . }}
+          BIND(COALESCE(?d1, ?d2) AS ?date)
+          SERVICE wikibase:label {{ bd:serviceParam wikibase:language "fr,en". }}
+        }}
+        """
+        url = "https://query.wikidata.org/sparql?format=json&query=" + urllib.parse.quote(query)
+        try:
+            data = netutil.fetch_json(
+                url,
+                headers={"Accept": "application/sparql-results+json"},
+                min_interval=1.5,
+                timeout=35,
+            )
+        except Exception as e:
+            print(f"[WARN] Palmarès Wikidata lot {i} : {e}")
+            break
+        rows = (data.get("results") or {}).get("bindings", []) if isinstance(data, dict) else []
+        seen_per_player: dict[str, set[str]] = {}
+        for r in rows:
+            fid = (r.get("fide") or {}).get("value", "")
+            titre = (r.get("eventLabel") or {}).get("value", "").strip()
+            if not fid or not titre or titre.startswith("Q"):
+                continue
+            date_raw = (r.get("date") or {}).get("value", "")
+            annee = int(date_raw[:4]) if len(date_raw) >= 4 and date_raw[:4].isdigit() else None
+            key = f"{annee or ''}|{titre.lower()}"
+            s = seen_per_player.setdefault(fid, set())
+            if key in s:
+                continue
+            s.add(key)
+            palmares.setdefault(fid, []).append({"titre": titre, "annee": annee})
+
+    for fid, items in palmares.items():
+        items.sort(key=lambda x: (-(x["annee"] or 0), x["titre"]))
+        palmares[fid] = items[:30]
+    return palmares
 
 
 def interroger_wikipedia_fr(titres: list[str]) -> dict[str, dict]:
@@ -160,7 +222,7 @@ def construire_fiches(
     dossier_sortie: str,
     *,
     avec_wiki: bool = True,
-    max_wiki: int = 80,
+    max_wiki: int = 250,
 ) -> dict:
     """Construit toutes les fiches joueurs et joueurs/index.json."""
     fiches: dict[str, dict] = {}
@@ -282,8 +344,9 @@ def construire_fiches(
                         "eco": p.get("eco", ""),
                     })
 
-    # 3. Recharger le cache Wikidata/Wikipédia existant et rafraîchir si besoin
+    # 3. Recharger le cache Wikidata/Wikipédia/Palmarès existant et rafraîchir si besoin
     a_rafraichir_wd: list[str] = []
+    a_rafraichir_pal: list[str] = []
     for fid, f in fiches.items():
         old_path = os.path.join(dossier_sortie, f"{fid}.json")
         if os.path.exists(old_path):
@@ -291,22 +354,28 @@ def construire_fiches(
                 with open(old_path, "r", encoding="utf-8") as fp:
                     old = json.load(fp)
                 if old.get("wikidata"):
-                    f["wikidata"] = old["wikidata"]
+                    wd_old = dict(old["wikidata"])
+                    if wd_old.get("photo_commons"):
+                        wd_old["photo_commons"] = _normaliser_photo_commons(wd_old["photo_commons"])
+                    f["wikidata"] = wd_old
                 if old.get("wikipedia"):
                     f["wikipedia"] = old["wikipedia"]
+                if "palmares" in old:
+                    f["palmares"] = old["palmares"]
+                    if old.get("palmares_maj"):
+                        f["palmares_maj"] = old["palmares_maj"]
             except Exception:
                 pass
         if avec_wiki and not _cache_valide((f.get("wikidata") or {}).get("maj")):
             a_rafraichir_wd.append(fid)
+        if avec_wiki and not _cache_valide(f.get("palmares_maj")):
+            a_rafraichir_pal.append(fid)
+
+    def _prio_elo(x: str) -> tuple:
+        return (-(fiches[x]["elo"].get("standard") or fiches[x]["elo"].get("tournoi") or 0), not fiches[x]["francais"])
 
     if avec_wiki and a_rafraichir_wd:
-        # Priorité aux Français puis meilleurs Elo
-        a_rafraichir_wd.sort(
-            key=lambda x: (
-                not fiches[x]["francais"],
-                -(fiches[x]["elo"].get("standard") or fiches[x]["elo"].get("tournoi") or 0),
-            )
-        )
+        a_rafraichir_wd.sort(key=_prio_elo)
         wd_map = interroger_wikidata(a_rafraichir_wd[:max_wiki])
         titres_wp: list[str] = []
         for fid, wd in wd_map.items():
@@ -319,6 +388,15 @@ def construire_fiches(
                 twp = wd.get("titre_wikipedia")
                 if twp and twp in wp_map:
                     fiches[fid]["wikipedia"] = wp_map[twp]
+
+    if avec_wiki and a_rafraichir_pal:
+        a_rafraichir_pal.sort(key=_prio_elo)
+        lot_pal = a_rafraichir_pal[:max_wiki]
+        pal_map = interroger_palmares_wikidata(lot_pal)
+        now_iso = netutil.utc_now_iso()
+        for fid in lot_pal:
+            fiches[fid]["palmares"] = pal_map.get(fid, [])
+            fiches[fid]["palmares_maj"] = now_iso
 
     # 4. Finaliser et écrire les fichiers
     os.makedirs(dossier_sortie, exist_ok=True)

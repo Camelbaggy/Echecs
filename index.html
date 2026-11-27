@@ -1514,9 +1514,13 @@
         const wp = j.wikipedia;
         const wd = j.wikidata;
 
+        const photoUrl = wd?.photo_commons
+          ? wd.photo_commons.replace(/^http:\/\//, 'https://') + (wd.photo_commons.includes('Special:FilePath') && !wd.photo_commons.includes('width=') ? '?width=240' : '')
+          : '';
+
         let html = `
           <div class="card" style="display:flex;align-items:center;gap:12px">
-            ${wd?.photo_commons ? `<img class="player-photo" src="${esc(wd.photo_commons)}" alt="${esc(nomAffiche(j.nom))}" loading="lazy" onerror="this.style.display='none'">` : ''}
+            ${photoUrl ? `<img class="player-photo" src="${esc(photoUrl)}" alt="${esc(nomAffiche(j.nom))}" loading="lazy" onerror="this.style.display='none'">` : ''}
             <div style="min-width:0;flex:1">
               <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                 ${flagHtml(j.drapeau, j.fed)}${titreHtml(j.titre)}<b style="font-size:1.02rem">${esc(nomAffiche(j.nom))}</b>
@@ -1543,6 +1547,25 @@
               <span class="mini-pill"><b>${b.v}</b> V · <b>${b.n}</b> N · <b>${b.d}</b> D</span>
               ${b.precision_moy != null ? `<span class="mini-pill">Précision moy. <b>${b.precision_moy.toFixed(1).replace('.', ',')} %</b></span>` : ''}
             </div>
+          </div>`;
+        }
+
+        const pal = j.palmares || [];
+        if (pal.length) {
+          html += `<div class="sec-head">
+            <div class="sec-title">🏆 Palmarès (${pal.length}) ${infoBtn('Tournois d’échecs remportés recensés sur Wikidata (propriété P1346). Liste non exhaustive.')}</div>
+          </div>
+          <div class="card" style="padding:8px 12px">
+            ${pal.slice(0, 8).map((it) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(38,50,72,0.5);font-size:0.82rem">
+              <span>${esc(it.titre)}</span>
+              <span style="color:var(--accent-elo);font-weight:700;flex:none">${it.annee || ''}</span>
+            </div>`).join('')}
+            ${pal.length > 8 ? `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.76rem;color:var(--accent-super);font-weight:600">Voir les ${pal.length - 8} autres titres</summary>
+              ${pal.slice(8).map((it) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid rgba(38,50,72,0.5);font-size:0.82rem">
+                <span>${esc(it.titre)}</span>
+                <span style="color:var(--accent-elo);font-weight:700;flex:none">${it.annee || ''}</span>
+              </div>`).join('')}
+            </details>` : ''}
           </div>`;
         }
 
@@ -1575,10 +1598,12 @@
       }
     }
 
-    /* ===== GESTION DES FEUILLES & INFO-BULLES ===== */
+    /* ===== GESTION DES FEUILLES, GLISSEMENT VERS LE BAS & INFO-BULLES ===== */
     function openSheet(id) {
       const el = $(id);
       if (!el) return;
+      const sh = el.querySelector('.sheet');
+      if (sh) { sh.style.transition = ''; sh.style.transform = ''; }
       STATE.zTop += 2;
       el.style.zIndex = String(STATE.zTop);
       el.classList.add('open');
@@ -1588,11 +1613,78 @@
     function closeSheet(id) {
       const el = $(id);
       if (!el) return;
+      const sh = el.querySelector('.sheet');
+      if (sh) { sh.style.transition = ''; sh.style.transform = ''; }
       el.classList.remove('open');
       if (!document.querySelector('.sheet-backdrop.open, .menu-backdrop.open')) {
         document.body.style.overflow = '';
       }
     }
+
+    function attachSheetDrag(backdropId) {
+      const bd = $(backdropId);
+      const sheet = bd?.querySelector('.sheet');
+      const body = bd?.querySelector('.sheet-body');
+      if (!bd || !sheet) return;
+      let startY = 0, startX = 0, startT = 0, dy = 0, active = false, canDrag = false;
+      const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      sheet.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) return;
+        const onTopZone = Boolean(e.target.closest('.sheet-handle, .sheet-head, .sheet-tabs'));
+        canDrag = onTopZone || !body || body.scrollTop <= 0;
+        if (!canDrag) return;
+        startY = e.touches[0].clientY;
+        startX = e.touches[0].clientX;
+        startT = Date.now();
+        dy = 0;
+        active = false;
+      }, { passive: true });
+
+      sheet.addEventListener('touchmove', (e) => {
+        if (!canDrag || e.touches.length !== 1) return;
+        const curY = e.touches[0].clientY - startY;
+        const curX = Math.abs(e.touches[0].clientX - startX);
+        if (!active) {
+          if (curY > 8 && curY > curX * 1.2) {
+            active = true;
+            closeInfo();
+            sheet.style.transition = 'none';
+            if (body) body.style.overflowY = 'hidden';
+          } else if (curY < -6 || curX > 10) {
+            canDrag = false;
+            return;
+          }
+        }
+        if (active) {
+          e.preventDefault();
+          dy = Math.max(0, curY);
+          sheet.style.transform = `translateY(${dy}px)`;
+        }
+      }, { passive: false });
+
+      const finish = () => {
+        if (!active) { canDrag = false; return; }
+        const dt = Math.max(1, Date.now() - startT);
+        const vel = dy / dt;
+        const shouldClose = dy > sheet.offsetHeight * 0.22 || (dy > 40 && vel > 0.45);
+        if (body) body.style.overflowY = '';
+        sheet.style.transition = reduced() ? 'none' : 'transform 0.2s ease-out';
+        if (shouldClose) {
+          sheet.style.transform = `translateY(${sheet.offsetHeight}px)`;
+          setTimeout(() => closeSheet(backdropId), reduced() ? 0 : 180);
+        } else {
+          sheet.style.transform = '';
+        }
+        active = false; canDrag = false; dy = 0;
+      };
+      sheet.addEventListener('touchend', finish, { passive: true });
+      sheet.addEventListener('touchcancel', finish, { passive: true });
+    }
+
+    attachSheetDrag('game-sheet');
+    attachSheetDrag('player-sheet');
+    attachSheetDrag('ronde-modal');
 
     function closeInfo() { $('info-pop').hidden = true; }
 
