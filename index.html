@@ -1,0 +1,1368 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0b0f17" />
+  <title>Échecs · Dashboard</title>
+  <style>
+    :root {
+      --app-h: 100vh;
+      --sheet-gap: calc(10px + env(safe-area-inset-top, 0px));
+      --bg-main: #0b0f17;
+      --bg-card: #151c28;
+      --bg-card-hover: #1c2536;
+      --bg-elevated: #202b3d;
+      --border: #263248;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent-fide: #f472b6;
+      --accent-super: #38bdf8;
+      --accent-france: #60a5fa;
+      --accent-autres: #34d399;
+      --accent-elo: #fbbf24;
+      --win: #10b981;
+      --draw: #94a3b8;
+      --loss: #ef4444;
+      --warn: #f59e0b;
+      --sq-light: #d7ccb8;
+      --sq-dark: #7890a6;
+      --sq-hl: rgba(250, 204, 21, 0.45);
+    }
+
+    @supports (height: 100dvh) { :root { --app-h: 100dvh; } }
+    [hidden] { display: none !important; }
+    html, body { overscroll-behavior-x: none; }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      line-height: 1.45;
+      padding-bottom: 48px;
+      overflow-x: hidden;
+    }
+
+    /* HEADER */
+    header {
+      position: sticky; top: 0; z-index: 30;
+      background: rgba(11, 15, 23, 0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 14px;
+    }
+    .header-top { display: flex; align-items: center; gap: 8px; }
+    .menu-btn {
+      flex: none; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+      background: none; border: 1px solid var(--border); border-radius: 10px; color: var(--text-main); cursor: pointer;
+      font-size: 1.1rem;
+    }
+    .menu-btn:hover { background: var(--bg-card-hover); }
+    .home-btn {
+      background: none; border: none; color: inherit; font: inherit; font-weight: 700; font-size: 1.02rem;
+      display: inline-flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; flex: 1 1 auto;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .home-btn .back { color: var(--text-muted); font-size: 1.1rem; display: none; }
+    header:not(.accueil) .home-btn .back { display: inline; }
+    .pill-lien {
+      flex: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 99px;
+      color: var(--text-muted); font-size: 0.74rem; font-weight: 600; text-decoration: none; white-space: nowrap;
+    }
+    .pill-lien:hover { color: var(--text-main); background: var(--bg-card-hover); }
+    .live-pill {
+      flex: none; font-size: 0.68rem; font-weight: 700; padding: 3px 8px; border-radius: 99px;
+      background: rgba(220, 38, 38, 0.18); color: #fca5a5; border: 1px solid rgba(220, 38, 38, 0.4);
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .live-pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
+
+    /* MAIN CONTAINER */
+    main { max-width: 680px; margin: 0 auto; padding: 14px; min-height: calc(var(--app-h) - 60px); }
+
+    .sec-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      margin: 18px 0 10px;
+    }
+    .sec-head:first-child { margin-top: 2px; }
+    .sec-title { font-size: 0.86rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+    .sec-action { background: none; border: none; color: var(--accent-super); font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+
+    /* CARDS */
+    .card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 12px 14px; margin-bottom: 10px;
+    }
+    .card.clickable { cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+    .card.clickable:hover { background: var(--bg-card-hover); }
+    .card.fra-card { border-left: 3px solid var(--accent-france); }
+
+    .flag { width: 18px; height: 13px; object-fit: cover; border-radius: 2px; vertical-align: -2px; flex: none; }
+    .titre-badge {
+      display: inline-block; font-size: 0.65rem; font-weight: 800; padding: 1px 4px; border-radius: 4px;
+      background: rgba(251, 191, 36, 0.16); color: var(--accent-elo); letter-spacing: 0.02em; flex: none;
+    }
+    .titre-badge.w { background: rgba(244, 114, 182, 0.16); color: var(--accent-fide); }
+    .statut-badge {
+      font-size: 0.66rem; font-weight: 700; padding: 2px 7px; border-radius: 99px; white-space: nowrap;
+    }
+    .statut-badge.en_cours { background: rgba(16, 185, 129, 0.16); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35); }
+    .statut-badge.termine { background: rgba(148, 163, 184, 0.14); color: var(--text-muted); }
+    .statut-badge.a_venir { background: rgba(56, 189, 248, 0.14); color: var(--accent-super); }
+
+    /* GAME ROW */
+    .game-row {
+      display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;
+      padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; margin-bottom: 8px; cursor: pointer; transition: background 0.15s;
+    }
+    .game-row:hover { background: var(--bg-card-hover); }
+    .game-row.fra { border-left: 3px solid var(--accent-france); }
+    .player-line { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 0.88rem; }
+    .player-line + .player-line { margin-top: 4px; }
+    .p-dot { width: 9px; height: 9px; border-radius: 2px; flex: none; border: 1px solid #475569; }
+    .p-dot.w { background: #f8fafc; }
+    .p-dot.b { background: #1e293b; }
+    .p-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .p-name.win { color: #fff; font-weight: 700; }
+    .p-elo { font-size: 0.74rem; color: var(--text-muted); flex: none; }
+    .game-right { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+    .res-pill {
+      font-size: 0.82rem; font-weight: 800; padding: 2px 8px; border-radius: 7px;
+      background: var(--bg-elevated); color: var(--text-main); font-variant-numeric: tabular-nums;
+    }
+    .game-meta { font-size: 0.7rem; color: var(--text-muted); }
+
+    /* FOCUS SUMMARY CARD */
+    .focus-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 0.72rem; color: var(--text-muted); margin-bottom: 6px; }
+    .focus-summary { font-size: 0.83rem; color: #cbd5e1; margin-top: 8px; line-height: 1.5; }
+    .focus-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .mini-pill { font-size: 0.7rem; padding: 2px 7px; border-radius: 6px; background: var(--bg-elevated); color: var(--text-muted); }
+    .mini-pill b { color: var(--text-main); }
+
+    /* TOURNAMENT HEADER & ROUND BAR */
+    .tour-hero { margin-bottom: 12px; }
+    .tour-hero h1 { font-size: 1.15rem; font-weight: 800; letter-spacing: -0.02em; }
+    .tour-sub { font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .ronde-btn {
+      width: 100%; display: flex; align-items: center; justify-content: space-between;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 10px 14px; color: var(--text-main); font: inherit; cursor: pointer; margin-bottom: 12px;
+    }
+    .ronde-btn:hover { background: var(--bg-card-hover); }
+    .ronde-btn .rt { font-weight: 700; font-size: 0.92rem; }
+    .ronde-btn .rs { font-size: 0.75rem; color: var(--text-muted); }
+
+    /* TABLES */
+    .tbl-wrap { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+    th { text-align: left; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 9px 8px; border-bottom: 1px solid var(--border); }
+    td { padding: 8px; border-bottom: 1px solid rgba(38, 50, 72, 0.55); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover td { background: var(--bg-card-hover); }
+    tr.fra-row td:first-child { box-shadow: inset 3px 0 0 var(--accent-france); }
+    .num { text-align: right; }
+    .name-cell { display: flex; align-items: center; gap: 6px; min-width: 120px; }
+
+    /* FIDE FILTERS */
+    .seg-bar { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; }
+    .seg-btn {
+      flex: 1 0 auto; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-muted);
+      padding: 7px 10px; border-radius: 10px; font: inherit; font-size: 0.78rem; font-weight: 600; cursor: pointer;
+    }
+    .seg-btn.active { background: var(--bg-elevated); color: var(--accent-elo); border-color: rgba(251, 191, 36, 0.45); }
+    .search-input {
+      width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--bg-card); color: var(--text-main); font: inherit; font-size: 0.86rem; margin-bottom: 10px;
+    }
+    .search-input::placeholder { color: var(--text-muted); }
+
+    /* MENU DRAWER */
+    .menu-backdrop { position: fixed; top: 0; left: 0; right: 0; height: var(--app-h); z-index: 60; display: none; background: rgba(0, 0, 0, 0.62); }
+    .menu-backdrop.open { display: block; }
+    .menu-panel {
+      position: absolute; top: 0; left: 0; bottom: 0; width: min(86vw, 330px);
+      display: flex; flex-direction: column; background: var(--bg-elevated);
+      border-right: 1px solid var(--border); padding-top: env(safe-area-inset-top, 0px);
+    }
+    .menu-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 10px 12px 16px; border-bottom: 1px solid var(--border); }
+    .menu-corps { flex: 1; overflow-y: auto; padding-bottom: 24px; }
+    .menu-sec { padding: 10px 16px 4px; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+    .menu-item {
+      width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+      padding: 10px 16px; background: none; border: none; border-bottom: 1px solid rgba(38, 50, 72, 0.5);
+      border-left: 3px solid transparent; color: var(--text-main); font: inherit; text-align: left; cursor: pointer;
+    }
+    .menu-item:hover { background: var(--bg-card-hover); }
+    .menu-item[aria-current="true"] { background: var(--bg-card); border-left-color: var(--accent-super); }
+    .menu-item b { font-size: 0.88rem; }
+    .menu-item span { font-size: 0.72rem; color: var(--text-muted); }
+
+    /* BOTTOM SHEETS */
+    .sheet-backdrop {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--app-h);
+      background: rgba(0, 0, 0, 0.68); display: none; align-items: flex-end; justify-content: center;
+      z-index: 80;
+    }
+    .sheet-backdrop.open { display: flex; }
+    .sheet {
+      width: 100%; max-width: 680px; height: calc(var(--app-h) - var(--sheet-gap));
+      background: var(--bg-main); border-top: 1px solid var(--border); border-radius: 18px 18px 0 0;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .sheet.compact { height: auto; max-height: 75vh; }
+    .sheet-handle { width: 40px; height: 4px; border-radius: 99px; background: #475569; margin: 8px auto 4px; flex: none; }
+    .sheet-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 6px 14px 10px; border-bottom: 1px solid var(--border); flex: none;
+    }
+    .sheet-title { font-size: 0.94rem; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .close-btn { width: 34px; height: 34px; border-radius: 8px; border: none; background: var(--bg-elevated); color: var(--text-muted); font-size: 1rem; cursor: pointer; flex: none; }
+    .sheet-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--border); flex: none; background: var(--bg-card); }
+    .sheet-tab {
+      background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-muted);
+      padding: 10px 4px; font: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+    }
+    .sheet-tab.active { color: var(--accent-super); border-bottom-color: var(--accent-super); }
+    .sheet-body { flex: 1; overflow-y: auto; padding: 12px 14px 28px; overscroll-behavior: contain; }
+
+    /* CHESSBOARD + EVAL BAR */
+    .board-stage { display: flex; gap: 8px; align-items: stretch; max-width: 440px; margin: 8px auto; }
+    .eval-bar {
+      width: 22px; flex: none; border-radius: 6px; overflow: hidden; position: relative;
+      background: #1e293b; border: 1px solid var(--border); display: flex; flex-direction: column;
+    }
+    .eval-black { background: #1e293b; transition: height 0.2s ease; }
+    .eval-white { background: #f1f5f9; flex: 1; }
+    .eval-txt {
+      position: absolute; left: 0; right: 0; text-align: center; font-size: 0.56rem; font-weight: 800;
+      padding: 2px 0; pointer-events: none;
+    }
+    .eval-txt.top { top: 2px; color: #f8fafc; }
+    .eval-txt.bot { bottom: 2px; color: #0f172a; }
+
+    .board-grid {
+      flex: 1; aspect-ratio: 1 / 1; display: grid; grid-template-columns: repeat(8, 1fr);
+      grid-template-rows: repeat(8, 1fr); border-radius: 8px; overflow: hidden;
+      border: 1px solid var(--border); user-select: none;
+    }
+    .sq {
+      position: relative; display: flex; align-items: center; justify-content: center;
+      font-size: clamp(22px, 7.6vw, 38px); line-height: 1;
+    }
+    .sq.light { background: var(--sq-light); }
+    .sq.dark { background: var(--sq-dark); }
+    .sq.hl::after { content: ''; position: absolute; inset: 0; background: var(--sq-hl); pointer-events: none; }
+    .piece { position: relative; z-index: 1; font-family: "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", serif; }
+    .piece.pw { color: #ffffff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85), 0 0 1px #000; }
+    .piece.pb { color: #0f172a; text-shadow: 0 1px 1px rgba(255, 255, 255, 0.45); }
+    .coord { position: absolute; font-size: 0.55rem; font-weight: 700; opacity: 0.72; pointer-events: none; }
+    .coord.r { top: 2px; left: 3px; }
+    .coord.f { bottom: 1px; right: 3px; }
+    .sq.light .coord { color: #475569; }
+    .sq.dark .coord { color: #f1f5f9; }
+
+    .player-strip {
+      max-width: 440px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; padding: 6px 8px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    }
+    .player-strip-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 0.84rem; font-weight: 700; cursor: pointer; }
+    .clock-box {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; font-weight: 700;
+      padding: 3px 8px; border-radius: 6px; background: var(--bg-elevated); color: var(--text-main); flex: none;
+    }
+    .clock-box.low { background: rgba(239, 68, 68, 0.22); color: #fca5a5; }
+
+    .board-controls {
+      max-width: 440px; margin: 10px auto 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
+    }
+    .ctrl-btn {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; color: var(--text-main);
+      padding: 10px 4px; font-size: 1rem; font-weight: 700; cursor: pointer;
+    }
+    .ctrl-btn:hover { background: var(--bg-card-hover); }
+    .ctrl-btn:disabled { opacity: 0.35; cursor: default; }
+
+    /* EVALUATION CHART */
+    .chart-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 10px; margin-bottom: 12px; }
+    .chart-svg { width: 100%; height: 130px; display: block; cursor: pointer; }
+    .stat-duo { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+    .stat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+    .stat-big { font-size: 1.35rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .stat-sub { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; }
+
+    /* MOVES LIST */
+    .moves-grid { display: grid; grid-template-columns: 36px 1fr 1fr; gap: 4px; font-size: 0.84rem; font-variant-numeric: tabular-nums; }
+    .mv-num { color: var(--text-muted); padding: 5px 4px; text-align: right; }
+    .mv-btn {
+      display: flex; align-items: center; justify-content: space-between; gap: 4px;
+      background: var(--bg-card); border: 1px solid transparent; border-radius: 7px;
+      padding: 5px 8px; color: var(--text-main); font: inherit; font-weight: 600; cursor: pointer; text-align: left;
+    }
+    .mv-btn:hover { background: var(--bg-card-hover); }
+    .mv-btn.cur { border-color: var(--accent-super); background: var(--bg-elevated); }
+    .mv-ev { font-size: 0.68rem; color: var(--text-muted); font-weight: 500; }
+    .mv-tag { font-size: 0.68rem; font-weight: 800; }
+    .mv-tag.gaffe { color: #ef4444; }
+    .mv-tag.erreur { color: #f59e0b; }
+    .mv-tag.imprecision { color: #38bdf8; }
+
+    /* INFO POPOVER */
+    .info-btn {
+      width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border);
+      background: var(--bg-elevated); color: var(--text-muted); font-size: 0.74rem; font-weight: 700;
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex: none;
+    }
+    #info-pop {
+      position: fixed; z-index: 100000; max-width: 310px; background: var(--bg-elevated);
+      border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
+      font-size: 0.78rem; color: var(--text-main); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
+      line-height: 1.45;
+    }
+
+    .empty-msg { text-align: center; color: var(--text-muted); padding: 28px 14px; font-size: 0.86rem; }
+    .wiki-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 12px; font-size: 0.82rem; color: #cbd5e1; }
+    .wiki-credit { font-size: 0.7rem; color: var(--text-muted); margin-top: 8px; }
+    .wiki-credit a { color: var(--accent-super); text-decoration: none; }
+    .player-photo { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; border: 2px solid var(--border); flex: none; }
+  </style>
+</head>
+<body>
+  <header id="app-header" class="accueil">
+    <div class="header-top">
+      <button id="menu-btn" class="menu-btn" aria-label="Ouvrir le menu">☰</button>
+      <button id="home-btn" class="home-btn">
+        <span class="back">←</span>
+        <span id="header-title">♔ Échecs</span>
+      </button>
+      <span id="live-pill" class="live-pill" hidden>Direct</span>
+      <a class="pill-lien" href="https://camelbaggy.github.io/coupes-europe/" rel="noopener">⚽ Foot</a>
+    </div>
+  </header>
+
+  <main id="main-zone">
+    <section id="view-accueil"></section>
+    <section id="view-tournoi" hidden></section>
+    <section id="view-fide" hidden></section>
+  </main>
+
+  <!-- Menu latéral -->
+  <div id="menu-modal" class="menu-backdrop" role="dialog" aria-modal="true" aria-label="Navigation">
+    <div class="menu-panel">
+      <div class="menu-head">
+        <b>♔ Dashboard Échecs</b>
+        <button class="close-btn" id="menu-close" aria-label="Fermer">✕</button>
+      </div>
+      <div class="menu-corps" id="menu-corps"></div>
+    </div>
+  </div>
+
+  <!-- Sélecteur de ronde -->
+  <div id="ronde-modal" class="sheet-backdrop" role="dialog" aria-modal="true" aria-label="Choisir une ronde">
+    <div class="sheet compact">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <div class="sheet-title">Choisir une ronde</div>
+        <button class="close-btn" data-close="ronde-modal" aria-label="Fermer">✕</button>
+      </div>
+      <div class="sheet-body" id="ronde-list"></div>
+    </div>
+  </div>
+
+  <!-- Fiche de partie -->
+  <div id="game-sheet" class="sheet-backdrop" role="dialog" aria-modal="true" aria-label="Fiche de partie">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <div class="sheet-title" id="game-sheet-title">Partie</div>
+        <button class="close-btn" data-close="game-sheet" aria-label="Fermer">✕</button>
+      </div>
+      <div class="sheet-tabs" id="game-tabs">
+        <button class="sheet-tab active" data-gtab="board">Échiquier</button>
+        <button class="sheet-tab" data-gtab="analyse">Analyse</button>
+        <button class="sheet-tab" data-gtab="coups">Coups</button>
+      </div>
+      <div class="sheet-body" id="game-sheet-body"></div>
+    </div>
+  </div>
+
+  <!-- Fiche joueur -->
+  <div id="player-sheet" class="sheet-backdrop" role="dialog" aria-modal="true" aria-label="Fiche joueur">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <div class="sheet-title" id="player-sheet-title">Joueur</div>
+        <button class="close-btn" data-close="player-sheet" aria-label="Fermer">✕</button>
+      </div>
+      <div class="sheet-body" id="player-sheet-body"></div>
+    </div>
+  </div>
+
+  <div id="info-pop" hidden></div>
+
+  <script>
+  (() => {
+    'use strict';
+
+    const BASE = new URLSearchParams(location.search).get('donnees') || '.';
+    const DATA_URL = (p) => `${BASE.replace(/\/$/, '')}/${p}`;
+
+    const STATE = {
+      indexTournois: null,
+      fide: null,
+      indexJoueurs: null,
+      tournoiCache: new Map(),
+      joueurCache: new Map(),
+      vue: 'accueil', // accueil | tournoi | fide
+      tournoiActif: null,
+      rondeActiveId: null,
+      fideCat: 'monde', // monde | france | femmes | juniors
+      fideCad: 'standard', // standard | rapid | blitz
+      fideQuery: '',
+      liveTournois: [],
+      gameCtx: null, // { partie, tournoi, plyIdx, flipped, tab, boards }
+      zTop: 80,
+      infoTexts: [],
+    };
+
+    const PIECE_GLYPHS = {
+      K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙',
+      k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟',
+    };
+    const CAT_LABELS = {
+      fide: 'Cycles FIDE',
+      super: 'Super-tournois',
+      france: 'France & Europe',
+      autres: 'Autres tournois OTB',
+    };
+    const CAT_COLORS = {
+      fide: 'var(--accent-fide)',
+      super: 'var(--accent-super)',
+      france: 'var(--accent-france)',
+      autres: 'var(--accent-autres)',
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    function nomAffiche(nom) {
+      if (!nom) return '?';
+      if (nom.includes(',')) {
+        const [a, b] = nom.split(',', 2).map((x) => x.trim());
+        return `${b} ${a}`.trim();
+      }
+      return nom;
+    }
+
+    function flagHtml(code, alt) {
+      if (!code) return '';
+      return `<img class="flag" src="https://flagcdn.com/w40/${esc(code)}.png" alt="${esc(alt || code)}" loading="lazy" onerror="this.style.display='none'">`;
+    }
+
+    function titreHtml(t) {
+      if (!t) return '';
+      const cls = t.startsWith('W') ? 'titre-badge w' : 'titre-badge';
+      return `<span class="${cls}">${esc(t)}</span>`;
+    }
+
+    function fmtClk(sec) {
+      if (sec == null) return '—';
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    }
+
+    function fmtEval(c) {
+      if (!c) return '';
+      if (c.m != null) return c.m > 0 ? `#${c.m}` : `#-${Math.abs(c.m)}`;
+      if (c.e != null) return `${c.e > 0 ? '+' : ''}${(c.e / 100).toFixed(1).replace('.', ',')}`;
+      return '';
+    }
+
+    function winPctFromPly(c) {
+      if (!c) return 50;
+      if (c.m != null) return c.m > 0 ? 100 : 0;
+      if (c.e != null) {
+        const cp = Math.max(-1000, Math.min(1000, c.e));
+        return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
+      }
+      return 50;
+    }
+
+    function infoBtn(html, label = 'Information') {
+      const idx = STATE.infoTexts.push(html) - 1;
+      return `<button type="button" class="info-btn" data-info="${idx}" aria-label="${esc(label)}">ⓘ</button>`;
+    }
+
+    /* ===== MINI-MOTEUR D'ÉCHIQUIER (UCI -> POSITIONS 64 CASES) ===== */
+    function initBoardArray() {
+      const b = new Array(64).fill('');
+      const back = 'RNBQKBNR';
+      for (let f = 0; f < 8; f++) {
+        b[f] = back[f];
+        b[8 + f] = 'P';
+        b[48 + f] = 'p';
+        b[56 + f] = back[f].toLowerCase();
+      }
+      return b;
+    }
+
+    function sqIdx(sq) { return (sq.charCodeAt(0) - 97) + (parseInt(sq[1], 10) - 1) * 8; }
+
+    function buildBoardsFromCoups(coups) {
+      const boards = [{ b: initBoardArray(), from: -1, to: -1 }];
+      for (const c of coups || []) {
+        const prev = boards[boards.length - 1].b.slice();
+        if (!c.u || c.u.length < 4) {
+          boards.push({ b: prev, from: -1, to: -1 });
+          continue;
+        }
+        const src = sqIdx(c.u.slice(0, 2));
+        const dst = sqIdx(c.u.slice(2, 4));
+        const promo = c.u[4] || '';
+        const piece = prev[src];
+        const isW = piece === piece.toUpperCase();
+        // Prise en passant
+        if (piece.toUpperCase() === 'P' && (src % 8) !== (dst % 8) && !prev[dst]) {
+          prev[(dst % 8) + Math.floor(src / 8) * 8] = '';
+        }
+        prev[dst] = promo ? (isW ? promo.toUpperCase() : promo.toLowerCase()) : piece;
+        prev[src] = '';
+        // Roque
+        if (piece.toUpperCase() === 'K' && Math.abs((dst % 8) - (src % 8)) === 2) {
+          const rank = Math.floor(src / 8);
+          if (dst % 8 === 6) { prev[rank * 8 + 5] = prev[rank * 8 + 7]; prev[rank * 8 + 7] = ''; }
+          else if (dst % 8 === 2) { prev[rank * 8 + 3] = prev[rank * 8 + 0]; prev[rank * 8 + 0] = ''; }
+        }
+        boards.push({ b: prev, from: src, to: dst });
+      }
+      return boards;
+    }
+
+    /* ===== CHARGEMENT DES DONNÉES ===== */
+    async function loadJson(rel) {
+      const r = await fetch(DATA_URL(rel));
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    }
+
+    async function loadTournoi(id) {
+      if (STATE.tournoiCache.has(id)) return STATE.tournoiCache.get(id);
+      const t = await loadJson(`tournois/${id}.json`);
+      STATE.tournoiCache.set(id, t);
+      return t;
+    }
+
+    async function loadJoueur(fid) {
+      if (STATE.joueurCache.has(fid)) return STATE.joueurCache.get(fid);
+      const j = await loadJson(`joueurs/${fid}.json`);
+      STATE.joueurCache.set(fid, j);
+      return j;
+    }
+
+    async function checkLiveLichess() {
+      if (document.hidden) return;
+      try {
+        const r = await fetch('https://lichess.org/api/broadcast/top?page=1');
+        if (!r.ok) return;
+        const d = await r.json();
+        const active = (d.active || []).filter((x) => (x.tour?.tier || 0) >= 4);
+        STATE.liveTournois = active;
+        const pill = $('live-pill');
+        if (active.length) {
+          pill.textContent = `Direct · ${active.length}`;
+          pill.hidden = false;
+        } else {
+          pill.hidden = true;
+        }
+        if (STATE.vue === 'accueil') renderAccueil();
+      } catch (_) {
+        // Hors ligne ou CORS bloqué : silencieux
+      }
+    }
+
+    /* ===== NAVIGATION & ROUTAGE ===== */
+    function syncHeader() {
+      const hdr = $('app-header');
+      hdr.classList.toggle('accueil', STATE.vue === 'accueil');
+      if (STATE.vue === 'accueil') $('header-title').textContent = '♔ Échecs';
+      else if (STATE.vue === 'fide') $('header-title').textContent = 'Classement FIDE';
+      else if (STATE.tournoiActif) $('header-title').textContent = STATE.tournoiActif.nom;
+    }
+
+    function syncUrl(replace = false) {
+      const u = new URL(location.href);
+      u.searchParams.delete('t'); u.searchParams.delete('r'); u.searchParams.delete('v');
+      if (STATE.vue === 'fide') u.searchParams.set('v', 'fide');
+      else if (STATE.vue === 'tournoi' && STATE.tournoiActif) {
+        u.searchParams.set('t', STATE.tournoiActif.id);
+        if (STATE.rondeActiveId) u.searchParams.set('r', STATE.rondeActiveId);
+      }
+      if (replace) history.replaceState(null, '', u);
+      else history.pushState(null, '', u);
+    }
+
+    function showVue(vue) {
+      STATE.vue = vue;
+      $('view-accueil').hidden = vue !== 'accueil';
+      $('view-tournoi').hidden = vue !== 'tournoi';
+      $('view-fide').hidden = vue !== 'fide';
+      syncHeader();
+      renderMenu();
+    }
+
+    async function ouvrirAccueil(push = true) {
+      showVue('accueil');
+      renderAccueil();
+      if (push) syncUrl();
+    }
+
+    async function ouvrirFide(push = true) {
+      showVue('fide');
+      renderFide();
+      if (push) syncUrl();
+    }
+
+    async function ouvrirTournoi(id, rondeId = null, push = true) {
+      try {
+        const t = await loadTournoi(id);
+        STATE.tournoiActif = t;
+        const rondes = t.rondes || [];
+        if (rondeId && rondes.some((r) => r.id === rondeId)) {
+          STATE.rondeActiveId = rondeId;
+        } else {
+          const enCours = rondes.find((r) => r.statut === 'en_cours');
+          const finies = rondes.filter((r) => r.statut === 'terminee');
+          STATE.rondeActiveId = enCours?.id || finies[finies.length - 1]?.id || rondes[0]?.id || null;
+        }
+        showVue('tournoi');
+        renderTournoi();
+        if (push) syncUrl();
+      } catch (e) {
+        $('view-tournoi').innerHTML = `<div class="empty-msg">Impossible de charger le tournoi (${esc(e.message)}).</div>`;
+        showVue('tournoi');
+      }
+    }
+
+    /* ===== RENDU ACCUEIL ===== */
+    function renderAccueil() {
+      const el = $('view-accueil');
+      const tournois = STATE.indexTournois?.tournois || [];
+      let html = '';
+
+      // 1. En direct (Lichess)
+      if (STATE.liveTournois.length) {
+        html += `<div class="sec-head"><div class="sec-title">En direct (Lichess) ${infoBtn('Tournois OTB majeurs actuellement en cours sur Lichess Broadcasts.')}</div></div>`;
+        for (const item of STATE.liveTournois.slice(0, 4)) {
+          const t = item.tour || {};
+          const r = item.round || {};
+          html += `<a class="card clickable" style="display:block;text-decoration:none;color:inherit;border-left:3px solid #ef4444" href="${esc(r.url || t.url || 'https://lichess.org/broadcast')}" target="_blank" rel="noopener">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <b>${esc(t.name)}</b>
+              <span class="live-pill">En cours</span>
+            </div>
+            <div class="game-meta" style="margin-top:4px">${esc(r.name || '')}${t.info?.location ? ' · ' + esc(t.info.location) : ''}</div>
+          </a>`;
+        }
+      }
+
+      // 2. Focus joueurs français récents
+      const fraCards = [];
+      for (const t of tournois) {
+        for (const p of (t.francais_recents || [])) {
+          fraCards.push({ ...p, tournoi_id: t.id, tournoi_nom: t.nom });
+        }
+      }
+      if (fraCards.length) {
+        html += `<div class="sec-head"><div class="sec-title">Focus joueurs français ${infoBtn('Détection automatique par code fédération FIDE (FRA). Résumés générés à partir des faits mesurés uniquement.')}</div></div>`;
+        for (const c of fraCards.slice(0, 6)) {
+          const pb = c.precision?.blancs;
+          const pn = c.precision?.noirs;
+          html += `<div class="card clickable fra-card" data-open-game="${esc(c.tournoi_id)}|${esc(c.ronde_id)}|${esc(c.partie_id)}">
+            <div class="focus-meta">
+              <span>${esc(c.tournoi_nom)} · ${esc(c.ronde)}</span>
+              <span>${esc(c.date || '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <div style="min-width:0;flex:1">
+                <div class="player-line"><span class="p-dot w"></span>${flagHtml(c.blancs.drapeau, c.blancs.fed)}${titreHtml(c.blancs.titre)}<span class="p-name ${c.resultat === '1-0' ? 'win' : ''}">${esc(nomAffiche(c.blancs.nom))}</span><span class="p-elo">${c.blancs.elo || ''}</span></div>
+                <div class="player-line"><span class="p-dot b"></span>${flagHtml(c.noirs.drapeau, c.noirs.fed)}${titreHtml(c.noirs.titre)}<span class="p-name ${c.resultat === '0-1' ? 'win' : ''}">${esc(nomAffiche(c.noirs.nom))}</span><span class="p-elo">${c.noirs.elo || ''}</span></div>
+              </div>
+              <span class="res-pill">${esc(c.resultat)}</span>
+            </div>
+            ${c.resume ? `<div class="focus-summary">${esc(c.resume)}</div>` : ''}
+            <div class="focus-pills">
+              ${c.ouverture || c.eco ? `<span class="mini-pill">${esc(c.eco ? c.eco + ' · ' : '')}${esc(c.ouverture || '')}</span>` : ''}
+              ${pb != null && pn != null ? `<span class="mini-pill">Précision <b>${pb.toFixed(1).replace('.', ',')} %</b> / <b>${pn.toFixed(1).replace('.', ',')} %</b></span>` : ''}
+              <span class="mini-pill">${c.nb_coups} coups</span>
+            </div>
+          </div>`;
+        }
+      }
+
+      // 3. Tournois OTB majeurs
+      html += `<div class="sec-head"><div class="sec-title">Tournois OTB majeurs</div></div>`;
+      if (!tournois.length) {
+        html += `<div class="empty-msg">Aucun tournoi collecté pour le moment.</div>`;
+      } else {
+        for (const t of tournois) {
+          const stLabel = t.statut === 'en_cours' ? 'En cours' : (t.statut === 'a_venir' ? 'À venir' : 'Terminé');
+          const accent = CAT_COLORS[t.categorie] || 'var(--accent-super)';
+          html += `<div class="card clickable" style="border-left:3px solid ${accent}" data-open-tour="${esc(t.id)}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+              <div>
+                <b style="font-size:0.94rem">${esc(t.nom)}</b>
+                <div class="game-meta" style="margin-top:2px">${esc(t.lieu || '')}${t.cadence ? ' · ' + esc(t.cadence) : ''}</div>
+              </div>
+              <span class="statut-badge ${esc(t.statut)}">${stLabel}</span>
+            </div>
+            <div class="focus-pills" style="margin-top:8px">
+              ${t.ronde_courante ? `<span class="mini-pill"><b>${esc(t.ronde_courante)}</b> (${t.rondes_finies}/${t.nb_rondes})</span>` : ''}
+              ${t.leader ? `<span class="mini-pill">Leader : ${flagHtml(t.leader.drapeau)} <b>${esc(nomAffiche(t.leader.nom))}</b> (${t.leader.score})</span>` : ''}
+              ${t.nb_francais ? `<span class="mini-pill">${flagHtml('fr')} <b>${t.nb_francais}</b> FRA</span>` : ''}
+            </div>
+          </div>`;
+        }
+      }
+
+      // 4. Aperçu Classement FIDE (Top 5 France)
+      const topFra = STATE.fide?.france?.standard?.slice(0, 5) || [];
+      if (topFra.length) {
+        html += `<div class="sec-head">
+          <div class="sec-title">Top France FIDE (${esc(STATE.fide.periode || '')})</div>
+          <button class="sec-action" id="btn-voir-fide">Voir tout →</button>
+        </div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>#</th><th>Joueur</th><th class="num">Elo</th></tr></thead>
+          <tbody>${topFra.map((r) => `<tr class="clickable fra-row" data-open-player="${esc(r.id)}">
+            <td>${r.rang}</td>
+            <td><div class="name-cell">${flagHtml(r.drapeau, r.fed)}${titreHtml(r.titre)}<span>${esc(nomAffiche(r.nom))}</span></div></td>
+            <td class="num"><b>${r.elo}</b></td>
+          </tr>`).join('')}</tbody>
+        </table></div>`;
+      }
+
+      el.innerHTML = html;
+      const btnFide = $('btn-voir-fide');
+      if (btnFide) btnFide.onclick = () => ouvrirFide();
+    }
+
+    /* ===== RENDU TOURNOI ===== */
+    function renderTournoi() {
+      const t = STATE.tournoiActif;
+      if (!t) return;
+      const el = $('view-tournoi');
+      const ronde = (t.rondes || []).find((r) => r.id === STATE.rondeActiveId) || (t.rondes || [])[0];
+
+      let html = `<div class="tour-hero">
+        <h1>${esc(t.nom)}</h1>
+        <div class="tour-sub">
+          ${t.lieu ? `<span>📍 ${esc(t.lieu)}</span>` : ''}
+          ${t.cadence ? `<span>⏱ ${esc(t.cadence)}</span>` : ''}
+          ${t.debut ? `<span>📅 ${esc(t.debut)}${t.fin ? ' → ' + esc(t.fin) : ''}</span>` : ''}
+          ${t.url_lichess ? `<a href="${esc(t.url_lichess)}" target="_blank" rel="noopener" style="color:var(--accent-super);text-decoration:none">Lichess ↗</a>` : ''}
+        </div>
+      </div>`;
+
+      if (ronde) {
+        const nbP = (ronde.parties || []).length;
+        html += `<button class="ronde-btn" id="ronde-btn">
+          <div><div class="rt">${esc(ronde.nom)}</div><div class="rs">${nbP ? nbP + ' parties' : (ronde.statut === 'a_venir' ? 'À venir' : 'Aucune partie')}</div></div>
+          <span>▾</span>
+        </button>`;
+
+        // Focus Français de la ronde
+        const fraRonde = (ronde.parties || []).filter((p) => p.est_francais && p.resume);
+        if (fraRonde.length) {
+          html += `<div class="sec-head"><div class="sec-title">Focus Français</div></div>`;
+          for (const p of fraRonde) {
+            html += `<div class="card clickable fra-card" data-open-game="${esc(t.id)}|${esc(ronde.id)}|${esc(p.id)}">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                <div style="min-width:0;flex:1">
+                  <div class="player-line"><span class="p-dot w"></span>${flagHtml(p.blancs.drapeau)}${titreHtml(p.blancs.titre)}<span class="p-name">${esc(nomAffiche(p.blancs.nom))}</span></div>
+                  <div class="player-line"><span class="p-dot b"></span>${flagHtml(p.noirs.drapeau)}${titreHtml(p.noirs.titre)}<span class="p-name">${esc(nomAffiche(p.noirs.nom))}</span></div>
+                </div>
+                <span class="res-pill">${esc(p.resultat)}</span>
+              </div>
+              <div class="focus-summary">${esc(p.resume)}</div>
+            </div>`;
+          }
+        }
+
+        // Liste des parties de la ronde
+        html += `<div class="sec-head"><div class="sec-title">Parties · ${esc(ronde.nom)}</div></div>`;
+        if (!nbP) {
+          html += `<div class="empty-msg">${ronde.statut === 'a_venir' ? 'Ronde programmée à venir.' : 'Aucune partie publiée pour cette ronde.'}</div>`;
+        } else {
+          for (const p of ronde.parties) {
+            const pb = p.analyse?.blancs?.precision;
+            const pn = p.analyse?.noirs?.precision;
+            html += `<div class="game-row ${p.est_francais ? 'fra' : ''}" data-open-game="${esc(t.id)}|${esc(ronde.id)}|${esc(p.id)}">
+              <div style="min-width:0">
+                <div class="player-line"><span class="p-dot w"></span>${flagHtml(p.blancs.drapeau)}${titreHtml(p.blancs.titre)}<span class="p-name ${p.resultat === '1-0' ? 'win' : ''}">${esc(nomAffiche(p.blancs.nom))}</span><span class="p-elo">${p.blancs.elo || ''}</span></div>
+                <div class="player-line"><span class="p-dot b"></span>${flagHtml(p.noirs.drapeau)}${titreHtml(p.noirs.titre)}<span class="p-name ${p.resultat === '0-1' ? 'win' : ''}">${esc(nomAffiche(p.noirs.nom))}</span><span class="p-elo">${p.noirs.elo || ''}</span></div>
+              </div>
+              <div class="game-right">
+                <span class="res-pill">${esc(p.resultat)}</span>
+                <span class="game-meta">${p.nb_coups ? p.nb_coups + ' c.' : ''}${pb != null ? ` · ${Math.round(pb)}/${Math.round(pn)}%` : ''}</span>
+              </div>
+            </div>`;
+          }
+        }
+      }
+
+      // Classement du tournoi
+      const cl = t.classement || [];
+      if (cl.length) {
+        html += `<div class="sec-head"><div class="sec-title">Classement ${infoBtn('Classement officiel issu de Lichess Broadcasts. Cliquez sur un joueur pour ouvrir sa fiche.')}</div></div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>#</th><th>Joueur</th><th class="num">Elo</th><th class="num">Pts</th><th class="num">Perf</th></tr></thead>
+          <tbody>${cl.slice(0, 50).map((j) => `<tr class="${j.fide_id ? 'clickable' : ''} ${j.francais ? 'fra-row' : ''}" ${j.fide_id ? `data-open-player="${esc(j.fide_id)}"` : ''}>
+            <td>${j.rang}</td>
+            <td><div class="name-cell">${flagHtml(j.drapeau, j.fed)}${titreHtml(j.titre)}<span>${esc(nomAffiche(j.nom))}</span></div></td>
+            <td class="num">${j.elo || '—'}</td>
+            <td class="num"><b>${j.score ?? '—'}</b>${j.jouees ? `<span style="color:var(--text-muted);font-size:0.72rem">/${j.jouees}</span>` : ''}</td>
+            <td class="num">${j.perf || '—'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>`;
+      }
+
+      el.innerHTML = html;
+      const rBtn = $('ronde-btn');
+      if (rBtn) rBtn.onclick = openRondeMenu;
+    }
+
+    function openRondeMenu() {
+      const t = STATE.tournoiActif;
+      if (!t) return;
+      $('ronde-list').innerHTML = (t.rondes || []).slice().reverse().map((r) => `
+        <button class="menu-item" aria-current="${r.id === STATE.rondeActiveId ? 'true' : 'false'}" data-choose-ronde="${esc(r.id)}">
+          <b>${esc(r.nom)}</b>
+          <span>${r.statut === 'terminee' ? 'Terminée' : (r.statut === 'en_cours' ? 'En cours' : 'À venir')}${r.parties?.length ? ' · ' + r.parties.length + ' parties' : ''}</span>
+        </button>
+      `).join('');
+      openSheet('ronde-modal');
+    }
+
+    /* ===== RENDU CLASSEMENT FIDE MENSUEL ===== */
+    function renderFide() {
+      const el = $('view-fide');
+      const f = STATE.fide;
+      if (!f) {
+        el.innerHTML = `<div class="empty-msg">Classement FIDE non encore collecté.</div>`;
+        return;
+      }
+      const cats = [
+        ['monde', 'Monde'], ['france', 'France'], ['femmes', 'Femmes'], ['juniors', 'Juniors'],
+      ];
+      const cads = STATE.fideCat === 'juniors'
+        ? [['standard', 'Classique']]
+        : [['standard', 'Classique'], ['rapid', 'Rapide'], ['blitz', 'Blitz']];
+      if (STATE.fideCat === 'juniors') STATE.fideCad = 'standard';
+
+      const rows = (f[STATE.fideCat]?.[STATE.fideCad] || []).filter((r) => {
+        if (!STATE.fideQuery) return true;
+        const q = STATE.fideQuery.toLowerCase();
+        return r.nom.toLowerCase().includes(q) || (r.fed || '').toLowerCase().includes(q);
+      });
+
+      el.innerHTML = `
+        <div class="sec-head">
+          <div class="sec-title">Classement FIDE · ${esc(f.periode || '')} ${infoBtn('Listes mensuelles officielles FIDE (joueurs actifs uniquement). Source : ratings.fide.com.')}</div>
+        </div>
+        <div class="seg-bar">${cats.map(([k, l]) => `<button class="seg-btn ${STATE.fideCat === k ? 'active' : ''}" data-fcat="${k}">${l}</button>`).join('')}</div>
+        <div class="seg-bar">${cads.map(([k, l]) => `<button class="seg-btn ${STATE.fideCad === k ? 'active' : ''}" data-fcad="${k}">${l}</button>`).join('')}</div>
+        <input type="search" class="search-input" id="fide-search" placeholder="Filtrer un joueur ou une fédération (ex. FRA, Carlsen)…" value="${esc(STATE.fideQuery)}">
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>#</th><th>Joueur</th><th class="num">Elo</th><th class="num">Né</th></tr></thead>
+          <tbody>${rows.length ? rows.map((r) => `<tr class="clickable ${r.francais ? 'fra-row' : ''}" data-open-player="${esc(r.id)}">
+            <td>${r.rang}</td>
+            <td><div class="name-cell">${flagHtml(r.drapeau, r.fed)}${titreHtml(r.titre)}<span>${esc(nomAffiche(r.nom))}</span></div></td>
+            <td class="num"><b>${r.elo}</b></td>
+            <td class="num" style="color:var(--text-muted)">${r.naissance || '—'}</td>
+          </tr>`).join('') : `<tr><td colspan="4" class="empty-msg">Aucun joueur trouvé.</td></tr>`}</tbody>
+        </table></div>
+      `;
+
+      const inp = $('fide-search');
+      if (inp) inp.oninput = (ev) => { STATE.fideQuery = ev.target.value; renderFide(); const n = $('fide-search'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } };
+    }
+
+    /* ===== MENU LATÉRAL ===== */
+    function renderMenu() {
+      const tournois = STATE.indexTournois?.tournois || [];
+      let html = `
+        <button class="menu-item" aria-current="${STATE.vue === 'accueil' ? 'true' : 'false'}" data-nav="accueil"><b>🏠 Accueil</b><span>En direct, Focus Français, tournois récents</span></button>
+        <button class="menu-item" aria-current="${STATE.vue === 'fide' ? 'true' : 'false'}" data-nav="fide" style="border-left-color:var(--accent-elo)"><b>🏆 Classement FIDE mensuel</b><span>Monde · France · Femmes · Juniors</span></button>
+      `;
+      for (const cat of ['fide', 'super', 'france', 'autres']) {
+        const list = tournois.filter((t) => t.categorie === cat);
+        if (!list.length) continue;
+        html += `<div class="menu-sec">${CAT_LABELS[cat]}</div>`;
+        for (const t of list) {
+          const active = STATE.vue === 'tournoi' && STATE.tournoiActif?.id === t.id;
+          html += `<button class="menu-item" aria-current="${active ? 'true' : 'false'}" style="border-left-color:${CAT_COLORS[cat]}" data-open-tour="${esc(t.id)}">
+            <b>${esc(t.nom)}</b>
+            <span>${esc(t.ronde_courante || t.statut)}${t.lieu ? ' · ' + esc(t.lieu) : ''}</span>
+          </button>`;
+        }
+      }
+      $('menu-corps').innerHTML = html;
+    }
+
+    /* ===== FICHE DE PARTIE (ÉCHIQUIER / ANALYSE / COUPS) ===== */
+    async function ouvrirPartie(tournoiId, rondeId, partieId) {
+      const t = await loadTournoi(tournoiId);
+      let partie = null;
+      for (const r of (t.rondes || [])) {
+        if (rondeId && r.id !== rondeId) continue;
+        partie = (r.parties || []).find((p) => p.id === partieId);
+        if (partie) break;
+      }
+      if (!partie) return;
+      const boards = buildBoardsFromCoups(partie.coups || []);
+      STATE.gameCtx = {
+        partie,
+        tournoi: t,
+        boards,
+        plyIdx: boards.length - 1,
+        flipped: Boolean(partie.noirs?.francais && !partie.blancs?.francais),
+        tab: 'board',
+      };
+      $('game-sheet-title').textContent = `${nomAffiche(partie.blancs.nom)} – ${nomAffiche(partie.noirs.nom)} (${partie.resultat})`;
+      updateGameTabs();
+      renderGameSheet();
+      openSheet('game-sheet');
+    }
+
+    function updateGameTabs() {
+      const cur = STATE.gameCtx?.tab || 'board';
+      document.querySelectorAll('#game-tabs .sheet-tab').forEach((b) => {
+        b.classList.toggle('active', b.dataset.gtab === cur);
+      });
+    }
+
+    function renderGameSheet() {
+      const ctx = STATE.gameCtx;
+      if (!ctx) return;
+      const body = $('game-sheet-body');
+      const p = ctx.partie;
+
+      if (ctx.tab === 'board') {
+        const bState = ctx.boards[ctx.plyIdx] || ctx.boards[0];
+        const curPly = ctx.plyIdx > 0 ? p.coups[ctx.plyIdx - 1] : null;
+        // Trouver la dernière pendule connue pour chaque camp jusqu'à plyIdx
+        let clkW = null, clkB = null;
+        for (let i = 0; i < ctx.plyIdx; i++) {
+          if (p.coups[i]?.c != null) {
+            if (i % 2 === 0) clkW = p.coups[i].c;
+            else clkB = p.coups[i].c;
+          }
+        }
+        const topP = ctx.flipped ? p.blancs : p.noirs;
+        const botP = ctx.flipped ? p.noirs : p.blancs;
+        const topClk = ctx.flipped ? clkW : clkB;
+        const botClk = ctx.flipped ? clkB : clkW;
+
+        const wp = curPly ? winPctFromPly(curPly) : 51.8;
+        const whiteH = Math.max(4, Math.min(96, wp));
+        const blackH = 100 - whiteH;
+        const evTxt = fmtEval(curPly);
+
+        let squaresHtml = '';
+        for (let row = 0; row < 8; row++) {
+          for (let col = 0; col < 8; col++) {
+            const rank = ctx.flipped ? row : 7 - row;
+            const file = ctx.flipped ? 7 - col : col;
+            const idx = rank * 8 + file;
+            const isLight = (rank + file) % 2 === 1;
+            const isHl = idx === bState.from || idx === bState.to;
+            const piece = bState.b[idx];
+            const pCls = piece ? (piece === piece.toUpperCase() ? 'pw' : 'pb') : '';
+            squaresHtml += `<div class="sq ${isLight ? 'light' : 'dark'}${isHl ? ' hl' : ''}">
+              ${col === 0 ? `<span class="coord r">${rank + 1}</span>` : ''}
+              ${row === 7 ? `<span class="coord f">${'abcdefgh'[file]}</span>` : ''}
+              ${piece ? `<span class="piece ${pCls}">${PIECE_GLYPHS[piece] || ''}</span>` : ''}
+            </div>`;
+          }
+        }
+
+        const moveBanner = curPly
+          ? `Coup ${Math.ceil(ctx.plyIdx / 2)}${ctx.plyIdx % 2 === 1 ? '.' : '…'} <b>${esc(curPly.s)}</b>${evTxt ? ' · ' + esc(evTxt) : ''}`
+          : 'Position initiale';
+
+        body.innerHTML = `
+          <div class="player-strip">
+            <div class="player-strip-name" ${topP.fide_id ? `data-open-player="${esc(topP.fide_id)}"` : ''}>
+              ${flagHtml(topP.drapeau)}${titreHtml(topP.titre)}<span>${esc(nomAffiche(topP.nom))}</span><span class="p-elo">${topP.elo || ''}</span>
+            </div>
+            ${topClk != null ? `<span class="clock-box ${topClk <= 60 ? 'low' : ''}">${fmtClk(topClk)}</span>` : ''}
+          </div>
+
+          <div class="board-stage">
+            <div class="eval-bar" title="Évaluation">
+              <div class="eval-black" style="height:${(ctx.flipped ? whiteH : blackH).toFixed(1)}%"></div>
+              <div class="eval-white"></div>
+              ${evTxt ? `<span class="eval-txt ${wp >= 50 ? 'bot' : 'top'}">${esc(evTxt)}</span>` : ''}
+            </div>
+            <div class="board-grid">${squaresHtml}</div>
+          </div>
+
+          <div class="player-strip">
+            <div class="player-strip-name" ${botP.fide_id ? `data-open-player="${esc(botP.fide_id)}"` : ''}>
+              ${flagHtml(botP.drapeau)}${titreHtml(botP.titre)}<span>${esc(nomAffiche(botP.nom))}</span><span class="p-elo">${botP.elo || ''}</span>
+            </div>
+            ${botClk != null ? `<span class="clock-box ${botClk <= 60 ? 'low' : ''}">${fmtClk(botClk)}</span>` : ''}
+          </div>
+
+          <div class="board-controls">
+            <button class="ctrl-btn" id="mv-first" ${ctx.plyIdx === 0 ? 'disabled' : ''} aria-label="Début">⏮</button>
+            <button class="ctrl-btn" id="mv-prev" ${ctx.plyIdx === 0 ? 'disabled' : ''} aria-label="Précédent">◀</button>
+            <button class="ctrl-btn" id="mv-next" ${ctx.plyIdx >= ctx.boards.length - 1 ? 'disabled' : ''} aria-label="Suivant">▶</button>
+            <button class="ctrl-btn" id="mv-last" ${ctx.plyIdx >= ctx.boards.length - 1 ? 'disabled' : ''} aria-label="Fin">⏭</button>
+            <button class="ctrl-btn" id="mv-flip" aria-label="Retourner">⇅</button>
+          </div>
+
+          <div class="card" style="margin-top:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.82rem">
+              <span>${moveBanner}</span>
+              <span style="color:var(--text-muted)">${esc(p.eco || '')}</span>
+            </div>
+            ${p.ouverture ? `<div class="game-meta" style="margin-top:4px">${esc(p.ouverture)}</div>` : ''}
+            ${p.resume ? `<div class="focus-summary">${esc(p.resume)}</div>` : ''}
+          </div>
+        `;
+
+        $('mv-first').onclick = () => { ctx.plyIdx = 0; renderGameSheet(); };
+        $('mv-prev').onclick = () => { if (ctx.plyIdx > 0) { ctx.plyIdx--; renderGameSheet(); } };
+        $('mv-next').onclick = () => { if (ctx.plyIdx < ctx.boards.length - 1) { ctx.plyIdx++; renderGameSheet(); } };
+        $('mv-last').onclick = () => { ctx.plyIdx = ctx.boards.length - 1; renderGameSheet(); };
+        $('mv-flip').onclick = () => { ctx.flipped = !ctx.flipped; renderGameSheet(); };
+      } else if (ctx.tab === 'analyse') {
+        const ana = p.analyse;
+        if (!ana || !ana.courbe) {
+          body.innerHTML = `<div class="empty-msg">Aucune analyse moteur disponible pour cette partie.</div>`;
+          return;
+        }
+        const courbe = ana.courbe;
+        const w = 320, h = 110;
+        const pts = courbe.map((v, i) => {
+          const x = courbe.length > 1 ? (i / (courbe.length - 1)) * w : w / 2;
+          const y = h - ((v ?? 50) / 100) * h;
+          return `${x.toFixed(1)},${y.toFixed(1)}`;
+        });
+        const areaWhite = `0,${h} ${pts.join(' ')} ${w},${h}`;
+
+        const b = ana.blancs || {};
+        const n = ana.noirs || {};
+        const srcLabel = p.eval_source === 'stockfish' ? 'Stockfish (CI)' : 'Lichess';
+
+        body.innerHTML = `
+          <div class="sec-head" style="margin-top:0">
+            <div class="sec-title">Chances de gain ${infoBtn('Courbe dérivée des évaluations moteur (' + esc(srcLabel) + ') selon la formule publique Lichess. Touchez la courbe pour sauter au coup correspondant.')}</div>
+            <span class="game-meta">${esc(srcLabel)}</span>
+          </div>
+          <div class="chart-box">
+            <svg class="chart-svg" id="eval-chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+              <rect x="0" y="0" width="${w}" height="${h}" fill="#1e293b" rx="4"/>
+              <polygon points="${areaWhite}" fill="#e2e8f0" fill-opacity="0.88"/>
+              <line x1="0" y1="${h / 2}" x2="${w}" y2="${h / 2}" stroke="#64748b" stroke-dasharray="3,3" stroke-width="1"/>
+              <polyline points="${pts.join(' ')}" fill="none" stroke="#38bdf8" stroke-width="1.6"/>
+            </svg>
+          </div>
+
+          <div class="stat-duo">
+            <div class="stat-card">
+              <div class="game-meta">Blancs · ${esc(nomAffiche(p.blancs.nom))}</div>
+              <div class="stat-big">${b.precision != null ? b.precision.toFixed(1).replace('.', ',') + ' %' : '—'}</div>
+              <div class="stat-sub">ACPL ${b.acpl ?? '—'} · ${b.gaffes || 0} gaffe(s) · ${b.erreurs || 0} err.</div>
+            </div>
+            <div class="stat-card">
+              <div class="game-meta">Noirs · ${esc(nomAffiche(p.noirs.nom))}</div>
+              <div class="stat-big">${n.precision != null ? n.precision.toFixed(1).replace('.', ',') + ' %' : '—'}</div>
+              <div class="stat-sub">ACPL ${n.acpl ?? '—'} · ${n.gaffes || 0} gaffe(s) · ${n.erreurs || 0} err.</div>
+            </div>
+          </div>
+
+          ${(ana.tournants || []).length ? `
+            <div class="sec-head"><div class="sec-title">Tournants objectifs</div></div>
+            ${ana.tournants.map((t) => `<div class="card clickable" data-jump-ply="${t.demi_coup}">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <b>Coup ${t.coup}${t.camp === 'blancs' ? '.' : '…'} ${esc(t.san)}</b>
+                <span class="mv-tag ${esc(t.type)}">${esc(t.type)} (${esc(t.eval)})</span>
+              </div>
+              <div class="game-meta" style="margin-top:3px">Chute de chances de gain : −${t.delta_wp.toFixed(1).replace('.', ',')} pts</div>
+            </div>`).join('')}
+          ` : ''}
+
+          ${ana.temps ? `
+            <div class="sec-head"><div class="sec-title">Gestion du temps</div></div>
+            <div class="stat-duo">
+              <div class="stat-card">
+                <div class="game-meta">Plus longue réflexion (B)</div>
+                <div style="font-weight:700;margin-top:3px">${ana.temps.plus_long?.blancs ? `${fmtClk(ana.temps.plus_long.blancs.sec)} (${ana.temps.plus_long.blancs.coup}. ${esc(ana.temps.plus_long.blancs.san)})` : '—'}</div>
+              </div>
+              <div class="stat-card">
+                <div class="game-meta">Plus longue réflexion (N)</div>
+                <div style="font-weight:700;margin-top:3px">${ana.temps.plus_long?.noirs ? `${fmtClk(ana.temps.plus_long.noirs.sec)} (${ana.temps.plus_long.noirs.coup}… ${esc(ana.temps.plus_long.noirs.san)})` : '—'}</div>
+              </div>
+            </div>
+          ` : ''}
+        `;
+
+        const svg = $('eval-chart');
+        if (svg) {
+          svg.onclick = (ev) => {
+            const rect = svg.getBoundingClientRect();
+            const ratio = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+            ctx.plyIdx = Math.max(1, Math.min(ctx.boards.length - 1, Math.round(ratio * (courbe.length - 1)) + 1));
+            ctx.tab = 'board';
+            updateGameTabs();
+            renderGameSheet();
+          };
+        }
+      } else {
+        // Onglet Coups
+        const coups = p.coups || [];
+        let rows = '';
+        for (let i = 0; i < coups.length; i += 2) {
+          const w = coups[i];
+          const b = coups[i + 1];
+          const num = (i / 2) + 1;
+          const badge = (c) => c?.k === 'gaffe' ? '<span class="mv-tag gaffe">??</span>' : (c?.k === 'erreur' ? '<span class="mv-tag erreur">?</span>' : (c?.k === 'imprecision' ? '<span class="mv-tag imprecision">?!</span>' : ''));
+          rows += `
+            <div class="mv-num">${num}.</div>
+            <button class="mv-btn ${ctx.plyIdx === i + 1 ? 'cur' : ''}" data-jump-ply="${i + 1}"><span>${esc(w.s)} ${badge(w)}</span><span class="mv-ev">${esc(fmtEval(w))}</span></button>
+            ${b ? `<button class="mv-btn ${ctx.plyIdx === i + 2 ? 'cur' : ''}" data-jump-ply="${i + 2}"><span>${esc(b.s)} ${badge(b)}</span><span class="mv-ev">${esc(fmtEval(b))}</span></button>` : '<div></div>'}
+          `;
+        }
+        body.innerHTML = coups.length ? `<div class="moves-grid">${rows}</div>` : `<div class="empty-msg">Aucun coup enregistré.</div>`;
+      }
+    }
+
+    /* ===== FICHE JOUEUR ===== */
+    async function ouvrirJoueur(fideId) {
+      $('player-sheet-title').textContent = 'Chargement…';
+      $('player-sheet-body').innerHTML = `<div class="empty-msg">Chargement de la fiche…</div>`;
+      openSheet('player-sheet');
+      try {
+        const j = await loadJoueur(fideId);
+        $('player-sheet-title').textContent = `${j.titre ? j.titre + ' ' : ''}${nomAffiche(j.nom)}`;
+        const b = j.bilan || {};
+        const wp = j.wikipedia;
+        const wd = j.wikidata;
+
+        let html = `
+          <div class="card" style="display:flex;align-items:center;gap:12px">
+            ${wd?.photo_commons ? `<img class="player-photo" src="${esc(wd.photo_commons)}" alt="${esc(nomAffiche(j.nom))}" loading="lazy" onerror="this.style.display='none'">` : ''}
+            <div style="min-width:0;flex:1">
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                ${flagHtml(j.drapeau, j.fed)}${titreHtml(j.titre)}<b style="font-size:1.02rem">${esc(nomAffiche(j.nom))}</b>
+              </div>
+              <div class="game-meta" style="margin-top:4px">${esc(j.pays || j.fed || '')}${j.annee_naissance ? ' · Né en ' + j.annee_naissance : ''} · ID FIDE ${esc(j.id)}</div>
+              <div class="focus-pills">
+                ${j.rangs?.monde_standard ? `<span class="mini-pill">Monde <b>#${j.rangs.monde_standard}</b></span>` : ''}
+                ${j.rangs?.france_standard ? `<span class="mini-pill">France <b>#${j.rangs.france_standard}</b></span>` : ''}
+              </div>
+            </div>
+          </div>
+
+          <div class="stat-duo" style="grid-template-columns:repeat(3,1fr)">
+            <div class="stat-card"><div class="game-meta">Classique</div><div class="stat-big">${j.elo?.standard || j.elo?.tournoi || '—'}</div></div>
+            <div class="stat-card"><div class="game-meta">Rapide</div><div class="stat-big">${j.elo?.rapid || '—'}</div></div>
+            <div class="stat-card"><div class="game-meta">Blitz</div><div class="stat-big">${j.elo?.blitz || '—'}</div></div>
+          </div>
+        `;
+
+        if (b.parties) {
+          html += `<div class="card">
+            <div class="game-meta" style="margin-bottom:6px">Bilan dans les tournois suivis (${b.parties} parties)</div>
+            <div class="focus-pills" style="margin-top:0">
+              <span class="mini-pill"><b>${b.v}</b> V · <b>${b.n}</b> N · <b>${b.d}</b> D</span>
+              ${b.precision_moy != null ? `<span class="mini-pill">Précision moy. <b>${b.precision_moy.toFixed(1).replace('.', ',')} %</b></span>` : ''}
+            </div>
+          </div>`;
+        }
+
+        if (wp?.extrait) {
+          html += `<div class="wiki-box">
+            <div>${esc(wp.extrait).replace(/\n\n/g, '<br><br>')}</div>
+            <div class="wiki-credit">Source : <a href="${esc(wp.url)}" target="_blank" rel="noopener">Wikipédia FR</a> (${esc(wp.licence || 'CC BY-SA 4.0')})</div>
+          </div>`;
+        }
+
+        if ((j.parties || []).length) {
+          html += `<div class="sec-head"><div class="sec-title">Parties récentes</div></div>`;
+          for (const p of j.parties.slice(0, 15)) {
+            const col = p.issue === 'v' ? 'var(--win)' : (p.issue === 'd' ? 'var(--loss)' : 'var(--draw)');
+            html += `<div class="card clickable" style="border-left:3px solid ${col}" data-open-game="${esc(p.tournoi_id)}|${esc(p.ronde_id)}|${esc(p.partie_id)}">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                <div style="min-width:0">
+                  <div class="player-line"><span class="p-dot ${p.couleur === 'blancs' ? 'w' : 'b'}"></span><span>vs ${flagHtml(p.adversaire_drapeau)} <b>${esc(nomAffiche(p.adversaire))}</b></span><span class="p-elo">${p.adversaire_elo || ''}</span></div>
+                  <div class="game-meta" style="margin-top:3px">${esc(p.tournoi)} · ${esc(p.ronde)}${p.precision != null ? ' · ' + p.precision.toFixed(1).replace('.', ',') + ' %' : ''}</div>
+                </div>
+                <span class="res-pill">${esc(p.resultat)}</span>
+              </div>
+            </div>`;
+          }
+        }
+
+        $('player-sheet-body').innerHTML = html;
+      } catch (e) {
+        $('player-sheet-body').innerHTML = `<div class="empty-msg">Fiche non disponible (${esc(e.message)}).</div>`;
+      }
+    }
+
+    /* ===== GESTION DES FEUILLES & INFO-BULLES ===== */
+    function openSheet(id) {
+      const el = $(id);
+      if (!el) return;
+      STATE.zTop += 2;
+      el.style.zIndex = String(STATE.zTop);
+      el.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeSheet(id) {
+      const el = $(id);
+      if (!el) return;
+      el.classList.remove('open');
+      if (!document.querySelector('.sheet-backdrop.open, .menu-backdrop.open')) {
+        document.body.style.overflow = '';
+      }
+    }
+
+    function closeInfo() { $('info-pop').hidden = true; }
+
+    function openInfo(btn) {
+      const pop = $('info-pop');
+      const idx = Number(btn.dataset.info);
+      if (!pop.hidden && pop.dataset.idx === String(idx)) { closeInfo(); return; }
+      pop.innerHTML = STATE.infoTexts[idx] || '';
+      pop.dataset.idx = String(idx);
+      pop.hidden = false;
+      const r = btn.getBoundingClientRect();
+      const pw = Math.min(310, window.innerWidth - 16);
+      const left = Math.max(8, Math.min(window.innerWidth - pw - 8, r.left - pw / 2 + r.width / 2));
+      const top = r.bottom + 8 + pop.offsetHeight < window.innerHeight ? r.bottom + 8 : Math.max(8, r.top - pop.offsetHeight - 8);
+      pop.style.left = `${left}px`;
+      pop.style.top = `${top}px`;
+    }
+
+    /* ===== ÉCOUTEURS GLOBAUX ===== */
+    document.addEventListener('click', (ev) => {
+      const info = ev.target.closest('.info-btn');
+      if (info) { ev.stopPropagation(); openInfo(info); return; }
+      if (!ev.target.closest('#info-pop')) closeInfo();
+
+      const closeTarget = ev.target.closest('[data-close]');
+      if (closeTarget) { closeSheet(closeTarget.dataset.close); return; }
+
+      if (ev.target.classList.contains('sheet-backdrop')) { closeSheet(ev.target.id); return; }
+      if (ev.target.id === 'menu-modal') { closeSheet('menu-modal'); return; }
+
+      const nav = ev.target.closest('[data-nav]');
+      if (nav) {
+        closeSheet('menu-modal');
+        if (nav.dataset.nav === 'accueil') ouvrirAccueil();
+        else if (nav.dataset.nav === 'fide') ouvrirFide();
+        return;
+      }
+
+      const tour = ev.target.closest('[data-open-tour]');
+      if (tour) { closeSheet('menu-modal'); ouvrirTournoi(tour.dataset.openTour); return; }
+
+      const ronde = ev.target.closest('[data-choose-ronde]');
+      if (ronde) {
+        STATE.rondeActiveId = ronde.dataset.chooseRonde;
+        closeSheet('ronde-modal');
+        renderTournoi();
+        syncUrl(true);
+        return;
+      }
+
+      const fcat = ev.target.closest('[data-fcat]');
+      if (fcat) { STATE.fideCat = fcat.dataset.fcat; renderFide(); return; }
+      const fcad = ev.target.closest('[data-fcad]');
+      if (fcad) { STATE.fideCad = fcad.dataset.fcad; renderFide(); return; }
+
+      const gtab = ev.target.closest('[data-gtab]');
+      if (gtab && STATE.gameCtx) {
+        STATE.gameCtx.tab = gtab.dataset.gtab;
+        updateGameTabs();
+        renderGameSheet();
+        return;
+      }
+
+      const jump = ev.target.closest('[data-jump-ply]');
+      if (jump && STATE.gameCtx) {
+        STATE.gameCtx.plyIdx = Number(jump.dataset.jumpPly);
+        STATE.gameCtx.tab = 'board';
+        updateGameTabs();
+        renderGameSheet();
+        return;
+      }
+
+      const player = ev.target.closest('[data-open-player]');
+      if (player) { ev.stopPropagation(); ouvrirJoueur(player.dataset.openPlayer); return; }
+
+      const game = ev.target.closest('[data-open-game]');
+      if (game) {
+        const [tid, rid, pid] = game.dataset.openGame.split('|');
+        ouvrirPartie(tid, rid, pid);
+        return;
+      }
+    });
+
+    $('menu-btn').onclick = () => openSheet('menu-modal');
+    $('menu-close').onclick = () => closeSheet('menu-modal');
+    $('home-btn').onclick = () => ouvrirAccueil();
+
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        if (!$('info-pop').hidden) { closeInfo(); return; }
+        const opens = [...document.querySelectorAll('.sheet-backdrop.open, .menu-backdrop.open')];
+        if (opens.length) {
+          opens.sort((a, b) => Number(b.style.zIndex || 0) - Number(a.style.zIndex || 0));
+          closeSheet(opens[0].id);
+        }
+      } else if ($('game-sheet').classList.contains('open') && STATE.gameCtx?.tab === 'board') {
+        if (ev.key === 'ArrowLeft' && STATE.gameCtx.plyIdx > 0) { STATE.gameCtx.plyIdx--; renderGameSheet(); }
+        if (ev.key === 'ArrowRight' && STATE.gameCtx.plyIdx < STATE.gameCtx.boards.length - 1) { STATE.gameCtx.plyIdx++; renderGameSheet(); }
+      }
+    });
+
+    /* ===== DÉMARRAGE ===== */
+    async function boot() {
+      const [idxT, fideD] = await Promise.allSettled([
+        loadJson('tournois/index.json'),
+        loadJson('fide/classement.json'),
+      ]);
+      if (idxT.status === 'fulfilled') STATE.indexTournois = idxT.value;
+      if (fideD.status === 'fulfilled') STATE.fide = fideD.value;
+
+      const params = new URLSearchParams(location.search);
+      if (params.get('v') === 'fide') await ouvrirFide(false);
+      else if (params.get('t')) await ouvrirTournoi(params.get('t'), params.get('r'), false);
+      else await ouvrirAccueil(false);
+
+      checkLiveLichess();
+      setInterval(checkLiveLichess, 60000);
+    }
+
+    window.addEventListener('popstate', () => {
+      const params = new URLSearchParams(location.search);
+      if (params.get('v') === 'fide') ouvrirFide(false);
+      else if (params.get('t')) ouvrirTournoi(params.get('t'), params.get('r'), false);
+      else ouvrirAccueil(false);
+    });
+
+    boot();
+  })();
+  </script>
+</body>
+</html>

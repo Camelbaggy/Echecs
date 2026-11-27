@@ -1,0 +1,52 @@
+name: Collecte tournois OTB
+
+on:
+  schedule:
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      max_tournois:
+        description: "Nombre maximal de tournois à examiner"
+        default: "12"
+      sf_budget:
+        description: "Budget Stockfish (parties par passage)"
+        default: "20"
+      sans_ia:
+        description: "Désactiver Gemini (résumés déterministes)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: collecte-tournois
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  collecte:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer Stockfish
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq stockfish
+
+      - name: Collecter les tournois OTB majeurs
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AI_BUDGET_SECONDS: "600"
+        run: |
+          ARGS="--tournois --max ${{ inputs.max_tournois || '12' }} --sf-budget ${{ inputs.sf_budget || '20' }}"
+          if [ "${{ inputs.sans_ia }}" = "true" ]; then
+            ARGS="$ARGS --sans-ia"
+          fi
+          python3 run_pipeline.py $ARGS
+
+      - name: Publier les données
+        run: bash .github/scripts/publier.sh "chore: mise à jour des tournois OTB" tournois joueurs
