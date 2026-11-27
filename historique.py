@@ -83,7 +83,7 @@ REQUETES_CIRCUIT: list[str] = [
 _RE_FRAGMENT = re.compile(
     r"(?:\bround\s+\d+\b|\bgame\s+\d+\b|\bplayoff\b|\btiebreak\b|\barmageddon\b|"
     r"\bultimate\s+moves\b|\bwild\s*card\b|\bqualifier\b|\bqualifying\b|"
-    r"\bboards\s+(?!1\b)\d+|\bmatches\s+(?!1\b)\d+|\bpoule\s+basse\b|\belimination\b|"
+    r"\blower\s+boards\b|\bboards\s+(?!1\b)\d+|\bmatches\s+(?!1\b)\d+|\bpoule\s+basse\b|\belimination\b|"
     r"\bopen\s+b\b|\bopen\s+c\b|\bgroup\s+[b-z]\b|\bchallengers\s+b\b)",
     re.IGNORECASE,
 )
@@ -157,7 +157,13 @@ def rechercher_broadcasts_circuit(
 def collecter_edition_historique(tour: dict) -> dict | None:
     """Collecte les métadonnées et le classement complet d'une édition (1 requête /players)."""
     tid = tour["id"]
-    raw_players = lichess.fetch_tournament_players(tid)
+    raw_players = netutil.fetch_json(
+        f"{lichess.API_BASE}/broadcast/{tid}/players",
+        min_interval=0.7,
+        timeout=20,
+    )
+    if not isinstance(raw_players, list):
+        return None
     classement = lichess.normaliser_joueurs(raw_players)
     if len(classement) < 2:
         return None
