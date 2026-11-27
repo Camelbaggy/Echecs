@@ -40,11 +40,35 @@ def main() -> int:
             page.on("pageerror", lambda e: errors.append(f"PAGEERROR: {e}"))
             page.on("console", lambda m: errors.append(f"CONSOLE {m.type}: {m.text}") if m.type == "error" else None)
 
+            live_top = (
+                '{"active":[{"tour":{"id":"live1","name":"Grand Live Test 2026","tier":5,'
+                '"info":{"location":"Paris","tc":"90+30"}},"round":{"id":"lr1","name":"Ronde 3","ongoing":true}}]}'
+            )
+            live_tour = (
+                '{"tour":{"id":"live1","name":"Grand Live Test 2026","info":{"location":"Paris","tc":"90+30"}},'
+                '"rounds":[{"id":"lr1","name":"Ronde 3","ongoing":true}]}'
+            )
+            live_pgn = (
+                '[Event "Grand Live Test 2026"]\n[White "Firouzja, Alireza"]\n[Black "Carlsen, Magnus"]\n'
+                '[Result "*"]\n[WhiteElo "2757"]\n[BlackElo "2823"]\n[ECO "C65"]\n\n'
+                '1. e4 { [%eval 0.20] [%clk 1:30:00] } 1... e5 { [%eval 0.22] [%clk 1:29:55] } '
+                '2. Nf3 { [%eval 0.18] [%clk 1:29:40] } 2... Nc6 { [%eval 0.20] [%clk 1:29:35] } '
+                '3. Bb5 { [%eval 0.15] [%clk 1:29:20] } 3... Nf6 { [%eval 0.19] [%clk 1:29:15] } '
+                '4. O-O { [%eval 0.16] [%clk 1:29:00] } *\n'
+            )
+
             def _route(route):
-                if route.request.url.startswith(f"http://127.0.0.1:{port}"):
+                u = route.request.url
+                if u.startswith(f"http://127.0.0.1:{port}"):
                     route.continue_()
-                elif "flagcdn.com" in route.request.url:
+                elif "flagcdn.com" in u:
                     route.fulfill(status=200, content_type="image/png", body=b"")
+                elif "api/broadcast/top" in u:
+                    route.fulfill(status=200, content_type="application/json", body=live_top)
+                elif "api/broadcast/live1" in u:
+                    route.fulfill(status=200, content_type="application/json", body=live_tour)
+                elif "api/broadcast/round/lr1.pgn" in u:
+                    route.fulfill(status=200, content_type="text/plain", body=live_pgn)
                 else:
                     route.fulfill(status=200, content_type="application/json", body="{}")
 
@@ -57,9 +81,25 @@ def main() -> int:
 
             page.goto(f"http://127.0.0.1:{port}/index.html", wait_until="networkidle")
             page.wait_for_selector("#view-accueil .fra-card")
-            check("Accueil")
+            page.wait_for_selector('[data-open-live="live1|lr1"]')
+            check("Accueil (+ bloc En direct)")
 
-            # Fiche de partie
+            # Tester ouverture d'un tournoi en direct DANS le dashboard (sans lien externe)
+            page.click('[data-open-live="live1|lr1"]')
+            page.wait_for_selector("#view-tournoi .game-row")
+            assert page.url.startswith(f"http://127.0.0.1:{port}/")
+            check("Tournoi en direct (dans le dashboard)")
+
+            # Ouvrir une partie en direct -> échiquier interactif
+            page.click("#view-tournoi .game-row")
+            page.wait_for_selector("#game-sheet.open .board-grid")
+            assert page.locator("#game-sheet .sq").count() == 64
+            check("Partie en direct · Échiquier")
+            page.click('#game-sheet [data-close="game-sheet"]')
+            page.click("#home-btn")
+            page.wait_for_selector("#view-accueil .fra-card")
+
+            # Fiche de partie (données collectées)
             page.click("#view-accueil .fra-card")
             page.wait_for_selector("#game-sheet.open .board-grid")
             assert page.locator("#game-sheet .sq").count() == 64

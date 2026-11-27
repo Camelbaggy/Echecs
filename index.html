@@ -550,6 +550,236 @@
       return r.json();
     }
 
+    /* ===== PARSEUR PGN + MOTEUR SAN -> UCI POUR LE DIRECT LICHESS (JS PUR) ===== */
+    class LiveBoard {
+      constructor() {
+        this.sq = initBoardArray();
+        this.turn = 'w';
+        this.ep = -1;
+      }
+      clone() {
+        const c = new LiveBoard();
+        c.sq = this.sq.slice();
+        c.turn = this.turn;
+        c.ep = this.ep;
+        return c;
+      }
+      kingSq(color) {
+        const k = color === 'w' ? 'K' : 'k';
+        return this.sq.indexOf(k);
+      }
+      isAttacked(s, by) {
+        const f = s % 8, r = (s / 8) | 0;
+        const pr = by === 'w' ? r - 1 : r + 1;
+        const pw = by === 'w' ? 'P' : 'p';
+        if (pr >= 0 && pr < 8) {
+          if (f > 0 && this.sq[pr * 8 + f - 1] === pw) return true;
+          if (f < 7 && this.sq[pr * 8 + f + 1] === pw) return true;
+        }
+        const kn = by === 'w' ? 'N' : 'n';
+        for (const [df, dr] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]) {
+          const nf = f + df, nr = r + dr;
+          if (nf >= 0 && nf < 8 && nr >= 0 && nr < 8 && this.sq[nr * 8 + nf] === kn) return true;
+        }
+        const ki = by === 'w' ? 'K' : 'k';
+        for (let df = -1; df <= 1; df++) for (let dr = -1; dr <= 1; dr++) {
+          if (!df && !dr) continue;
+          const nf = f + df, nr = r + dr;
+          if (nf >= 0 && nf < 8 && nr >= 0 && nr < 8 && this.sq[nr * 8 + nf] === ki) return true;
+        }
+        const rq = by === 'w' ? 'RQ' : 'rq';
+        for (const [df, dr] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          let cf = f + df, cr = r + dr;
+          while (cf >= 0 && cf < 8 && cr >= 0 && cr < 8) {
+            const p = this.sq[cr * 8 + cf];
+            if (p) { if (rq.includes(p)) return true; break; }
+            cf += df; cr += dr;
+          }
+        }
+        const bq = by === 'w' ? 'BQ' : 'bq';
+        for (const [df, dr] of [[1,1],[1,-1],[-1,1],[-1,-1]]) {
+          let cf = f + df, cr = r + dr;
+          while (cf >= 0 && cf < 8 && cr >= 0 && cr < 8) {
+            const p = this.sq[cr * 8 + cf];
+            if (p) { if (bq.includes(p)) return true; break; }
+            cf += df; cr += dr;
+          }
+        }
+        return false;
+      }
+      pathClear(sf, sr, df, dr) {
+        const stf = df === sf ? 0 : (df > sf ? 1 : -1);
+        const str = dr === sr ? 0 : (dr > sr ? 1 : -1);
+        let cf = sf + stf, cr = sr + str;
+        while (cf !== df || cr !== dr) {
+          if (this.sq[cr * 8 + cf]) return false;
+          cf += stf; cr += str;
+        }
+        return true;
+      }
+      canReach(src, dst, pt, isCap) {
+        const sf = src % 8, sr = (src / 8) | 0, df = dst % 8, dr = (dst / 8) | 0;
+        const dx = df - sf, dy = dr - sr;
+        if (pt === 'P') {
+          const step = this.turn === 'w' ? 1 : -1;
+          const startR = this.turn === 'w' ? 1 : 6;
+          if (isCap) return Math.abs(dx) === 1 && dy === step && (Boolean(this.sq[dst]) || dst === this.ep);
+          if (dx !== 0 || this.sq[dst]) return false;
+          if (dy === step) return true;
+          return dy === 2 * step && sr === startR && !this.sq[(sr + step) * 8 + sf];
+        }
+        if (pt === 'N') return (Math.abs(dx) === 1 && Math.abs(dy) === 2) || (Math.abs(dx) === 2 && Math.abs(dy) === 1);
+        if (pt === 'K') return Math.max(Math.abs(dx), Math.abs(dy)) === 1;
+        if (pt === 'B') return Math.abs(dx) === Math.abs(dy) && dx !== 0 && this.pathClear(sf, sr, df, dr);
+        if (pt === 'R') return (dx === 0 || dy === 0) && (dx !== 0 || dy !== 0) && this.pathClear(sf, sr, df, dr);
+        if (pt === 'Q') return (dx === 0 || dy === 0 || Math.abs(dx) === Math.abs(dy)) && (dx !== 0 || dy !== 0) && this.pathClear(sf, sr, df, dr);
+        return false;
+      }
+      applyRaw(src, dst, promo) {
+        const p = this.sq[src], pt = p.toUpperCase();
+        if (pt === 'P' && dst === this.ep && !this.sq[dst]) {
+          this.sq[(dst % 8) + ((src / 8) | 0) * 8] = '';
+        }
+        this.sq[dst] = promo ? (this.turn === 'w' ? promo.toUpperCase() : promo.toLowerCase()) : p;
+        this.sq[src] = '';
+        if (pt === 'K' && Math.abs((dst % 8) - (src % 8)) === 2) {
+          const rank = (src / 8) | 0;
+          if (dst % 8 === 6) { this.sq[rank * 8 + 5] = this.sq[rank * 8 + 7]; this.sq[rank * 8 + 7] = ''; }
+          else if (dst % 8 === 2) { this.sq[rank * 8 + 3] = this.sq[rank * 8 + 0]; this.sq[rank * 8 + 0] = ''; }
+        }
+        this.ep = (pt === 'P' && Math.abs(((dst / 8) | 0) - ((src / 8) | 0)) === 2) ? ((src + dst) >> 1) : -1;
+        this.turn = this.turn === 'w' ? 'b' : 'w';
+      }
+      pushSan(san) {
+        const m = /^(?:(O-O-O|O-O|0-0-0|0-0)|([KQRBN])?([a-h])?([1-8])?(x)?([a-h][1-8])(?:=([QRBN]))?)[+#?!]*$/.exec(san.trim());
+        if (!m) return '';
+        const [, castle, ptRaw, sf, sr, cap, dstS, promo] = m;
+        const idxToSq = (i) => 'abcdefgh'[i % 8] + (((i / 8) | 0) + 1);
+        if (castle) {
+          const rank = this.turn === 'w' ? 0 : 7;
+          const src = rank * 8 + 4, dst = rank * 8 + (castle.length === 5 ? 2 : 6);
+          this.applyRaw(src, dst, '');
+          return idxToSq(src) + idxToSq(dst);
+        }
+        const pt = ptRaw || 'P', dst = sqIdx(dstS);
+        const pc = this.turn === 'w' ? pt : pt.toLowerCase();
+        const isCap = Boolean(cap) || Boolean(this.sq[dst]) || (pt === 'P' && dst === this.ep);
+        const opp = this.turn === 'w' ? 'b' : 'w';
+        let found = -1;
+        for (let i = 0; i < 64; i++) {
+          if (this.sq[i] !== pc) continue;
+          if (sf && 'abcdefgh'[i % 8] !== sf) continue;
+          if (sr && String(((i / 8) | 0) + 1) !== sr) continue;
+          if (!this.canReach(i, dst, pt, isCap)) continue;
+          const t = this.clone();
+          t.applyRaw(i, dst, promo || '');
+          const ks = t.kingSq(this.turn);
+          if (ks >= 0 && t.isAttacked(ks, opp)) continue;
+          found = i; break;
+        }
+        if (found < 0) return '';
+        this.applyRaw(found, dst, promo || '');
+        return idxToSq(found) + idxToSq(dst) + (promo ? promo.toLowerCase() : '');
+      }
+    }
+
+    function parsePgnLive(pgnText, tourId, roundId, roundName, playersRef = []) {
+      const byFide = new Map(), byName = new Map();
+      for (const j of playersRef) {
+        if (j.fide_id) byFide.set(String(j.fide_id), j);
+        byName.set((j.nom || '').toLowerCase(), j);
+      }
+      const blocks = pgnText.trim().split(/\n\s*\n(?=\[Event\s)/).filter((b) => b.trim());
+      const parties = [];
+      for (let idx = 0; idx < Math.min(blocks.length, 30); idx++) {
+        const blk = blocks[idx];
+        const headers = {};
+        const moveLines = [];
+        for (const line of blk.split(/\r?\n/)) {
+          const hm = /^\[([A-Za-z0-9_]+)\s+"((?:\\.|[^"\\])*)"\]\s*$/.exec(line.trim());
+          if (hm) headers[hm[1]] = hm[2].replace(/\\"/g, '"');
+          else if (line.trim()) moveLines.push(line.trim());
+        }
+        const mt = moveLines.join(' ');
+        const tokens = [];
+        let i = 0, depth = 0;
+        while (i < mt.length) {
+          const ch = mt[i];
+          if (/\s/.test(ch)) { i++; continue; }
+          if (ch === '(') { depth++; i++; continue; }
+          if (ch === ')') { depth = Math.max(0, depth - 1); i++; continue; }
+          if (ch === '{') {
+            const end = mt.indexOf('}', i + 1);
+            if (end < 0) break;
+            if (depth === 0 && tokens.length) tokens[tokens.length - 1].c += ' ' + mt.slice(i + 1, end);
+            i = end + 1; continue;
+          }
+          if (ch === '}') { i++; continue; }
+          let j = i;
+          while (j < mt.length && !/\s/.test(mt[j]) && !'(){}'.includes(mt[j])) j++;
+          if (j === i) { i++; continue; }
+          const w = mt.slice(i, j).replace(/^\d+\.+/, '');
+          i = j;
+          if (depth > 0 || !w || w.startsWith('$') || ['1-0','0-1','1/2-1/2','*'].includes(w)) continue;
+          tokens.push({ s: w, c: '' });
+        }
+        const board = new LiveBoard();
+        const coups = [];
+        let uciOk = true;
+        for (const tk of tokens) {
+          const u = uciOk ? board.pushSan(tk.s) : '';
+          if (!u) uciOk = false;
+          const item = { s: tk.s };
+          if (u) item.u = u;
+          const me = /\[%eval\s+([#+-]?\d+(?:\.\d+)?)\]/.exec(tk.c);
+          if (me) {
+            if (me[1].startsWith('#')) item.m = parseInt(me[1].slice(1), 10);
+            else item.e = Math.round(parseFloat(me[1]) * 100);
+          }
+          const mc = /\[%clk\s+(\d+):(\d+):(\d+(?:\.\d+)?)\]/.exec(tk.c);
+          if (mc) item.c = Math.round(Number(mc[1]) * 3600 + Number(mc[2]) * 60 + Number(mc[3]));
+          coups.push(item);
+        }
+        const mkP = (nom, fid, elo, tit) => {
+          const ref = (fid && byFide.get(String(fid))) || byName.get((nom || '').toLowerCase());
+          const fed = ref?.fed || '';
+          return {
+            nom: ref?.nom || nom || '?',
+            fide_id: fid || ref?.fide_id || '',
+            fed,
+            drapeau: ref?.drapeau || '',
+            francais: fed === 'FRA',
+            titre: tit || ref?.titre || '',
+            elo: /^\d+$/.test(elo || '') ? Number(elo) : (ref?.elo || null),
+          };
+        };
+        const blancs = mkP(headers.White, headers.WhiteFideId, headers.WhiteElo, headers.WhiteTitle);
+        const noirs = mkP(headers.Black, headers.BlackFideId, headers.BlackElo, headers.BlackTitle);
+        const res = (headers.Result || '*').trim();
+        const evals = coups.filter((c) => c.e != null || c.m != null).length;
+        const courbe = evals >= 2 ? coups.map((c) => (c.e != null || c.m != null) ? Number(winPctFromPly(c).toFixed(1)) : null) : null;
+        parties.push({
+          id: `${tourId}-${roundId}-${idx + 1}`,
+          echiquier: idx + 1,
+          ronde_id: roundId,
+          ronde: roundName,
+          date: (headers.UTCDate || headers.Date || '').replace(/\./g, '-'),
+          blancs, noirs,
+          resultat: res,
+          statut: ['1-0','0-1','1/2-1/2'].includes(res) ? 'terminee' : 'en_cours',
+          est_francais: Boolean(blancs.francais || noirs.francais),
+          nb_coups: Math.ceil(coups.length / 2),
+          eco: headers.ECO || '',
+          ouverture: headers.Opening || '',
+          coups,
+          direct: true,
+          eval_source: courbe ? 'lichess' : '',
+          analyse: courbe ? { courbe, blancs: {}, noirs: {}, tournants: [] } : null,
+        });
+      }
+      return parties;
+    }
+
     async function loadTournoi(id) {
       if (STATE.tournoiCache.has(id)) return STATE.tournoiCache.get(id);
       const t = await loadJson(`tournois/${id}.json`);
@@ -562,6 +792,95 @@
       const j = await loadJson(`joueurs/${fid}.json`);
       STATE.joueurCache.set(fid, j);
       return j;
+    }
+
+    async function chargerRondeDirect(tour, roundId) {
+      const r = await fetch(`https://lichess.org/api/broadcast/round/${roundId}.pgn`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const pgnText = await r.text();
+      const ronde = (tour.rondes || []).find((x) => x.id === roundId);
+      const parties = parsePgnLive(pgnText, tour.id, roundId, ronde?.nom || 'En direct', tour.classement || []);
+      if (ronde) {
+        ronde.parties = parties;
+        ronde._direct = true;
+      }
+      return parties;
+    }
+
+    async function ouvrirTournoiDirect(tourId, roundId, push = true) {
+      $('view-tournoi').innerHTML = `<div class="empty-msg">Chargement du direct Lichess…</div>`;
+      showVue('tournoi');
+      try {
+        // 1. Charger le tournoi déjà collecté s'il figure dans l'index (évite un 404 console)
+        let base = null;
+        if ((STATE.indexTournois?.tournois || []).some((x) => x.id === tourId)) {
+          try { base = await loadTournoi(tourId); } catch (_) { base = null; }
+        }
+
+        // 2. Interroger l'API publique Lichess (CORS *)
+        const resp = await fetch(`https://lichess.org/api/broadcast/${tourId}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const td = await resp.json();
+        const tourMeta = td.tour || {};
+        const info = tourMeta.info || {};
+        const existingMap = new Map((base?.rondes || []).map((r) => [r.id, r]));
+        const rondes = (td.rounds || []).map((r) => {
+          const prev = existingMap.get(r.id);
+          return {
+            id: r.id,
+            nom: r.name || prev?.nom || 'Ronde',
+            statut: r.ongoing ? 'en_cours' : (r.finished ? 'terminee' : 'a_venir'),
+            parties: prev?.parties || [],
+          };
+        });
+        const tournoi = {
+          id: tourId,
+          nom: tourMeta.name || base?.nom || tourId,
+          lieu: info.location || base?.lieu || '',
+          cadence: info.tc || base?.cadence || '',
+          debut: base?.debut || '',
+          fin: base?.fin || '',
+          classement: base?.classement || [],
+          rondes,
+          direct: true,
+        };
+        const cibleId = roundId || rondes.find((r) => r.statut === 'en_cours')?.id || rondes[rondes.length - 1]?.id;
+        if (cibleId) await chargerRondeDirect(tournoi, cibleId);
+
+        STATE.tournoiCache.set(tourId, tournoi);
+        STATE.tournoiActif = tournoi;
+        STATE.rondeActiveId = cibleId;
+        syncHeader();
+        renderTournoi();
+        if (push) syncUrl();
+      } catch (e) {
+        $('view-tournoi').innerHTML = `<div class="empty-msg">Impossible de charger le direct Lichess (${esc(e.message)}).</div>`;
+      }
+    }
+
+    async function refreshDirectActif() {
+      if (document.hidden) return;
+      const t = STATE.tournoiActif;
+      if (!t || !t.direct || !STATE.rondeActiveId) return;
+      const ronde = (t.rondes || []).find((r) => r.id === STATE.rondeActiveId);
+      if (!ronde || ronde.statut !== 'en_cours') return;
+      try {
+        const parties = await chargerRondeDirect(t, STATE.rondeActiveId);
+        if (STATE.vue === 'tournoi') renderTournoi();
+        if ($('game-sheet').classList.contains('open') && STATE.gameCtx?.partie?.direct) {
+          const fresh = parties.find((p) => p.id === STATE.gameCtx.partie.id);
+          if (fresh) {
+            const wasAtEnd = STATE.gameCtx.plyIdx >= STATE.gameCtx.boards.length - 1;
+            const newBoards = buildBoardsFromCoups(fresh.coups || []);
+            STATE.gameCtx.partie = fresh;
+            STATE.gameCtx.boards = newBoards;
+            if (wasAtEnd) STATE.gameCtx.plyIdx = newBoards.length - 1;
+            else STATE.gameCtx.plyIdx = Math.min(STATE.gameCtx.plyIdx, newBoards.length - 1);
+            $('game-sheet-title').textContent = `${nomAffiche(fresh.blancs.nom)} – ${nomAffiche(fresh.noirs.nom)} (${fresh.resultat})`;
+            renderGameSheet();
+          }
+        }
+      } catch (_) {}
     }
 
     async function checkLiveLichess() {
@@ -654,19 +973,19 @@
       const tournois = STATE.indexTournois?.tournois || [];
       let html = '';
 
-      // 1. En direct (Lichess)
+      // 1. En direct (Lichess, ouvert DANS le dashboard)
       if (STATE.liveTournois.length) {
-        html += `<div class="sec-head"><div class="sec-title">En direct (Lichess) ${infoBtn('Tournois OTB majeurs actuellement en cours sur Lichess Broadcasts.')}</div></div>`;
+        html += `<div class="sec-head"><div class="sec-title">En direct (Lichess) ${infoBtn('Tournois OTB majeurs actuellement en cours. Les parties s’ouvrent directement dans le dashboard avec rafraîchissement automatique toutes les 30 s.')}</div></div>`;
         for (const item of STATE.liveTournois.slice(0, 4)) {
           const t = item.tour || {};
           const r = item.round || {};
-          html += `<a class="card clickable" style="display:block;text-decoration:none;color:inherit;border-left:3px solid #ef4444" href="${esc(r.url || t.url || 'https://lichess.org/broadcast')}" target="_blank" rel="noopener">
+          html += `<div class="card clickable" style="border-left:3px solid #ef4444" data-open-live="${esc(t.id)}|${esc(r.id || '')}">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
               <b>${esc(t.name)}</b>
               <span class="live-pill">En cours</span>
             </div>
             <div class="game-meta" style="margin-top:4px">${esc(r.name || '')}${t.info?.location ? ' · ' + esc(t.info.location) : ''}</div>
-          </a>`;
+          </div>`;
         }
       }
 
@@ -761,10 +1080,10 @@
       let html = `<div class="tour-hero">
         <h1>${esc(t.nom)}</h1>
         <div class="tour-sub">
+          ${t.direct ? `<span class="live-pill">En direct · maj 30 s</span>` : ''}
           ${t.lieu ? `<span>📍 ${esc(t.lieu)}</span>` : ''}
           ${t.cadence ? `<span>⏱ ${esc(t.cadence)}</span>` : ''}
           ${t.debut ? `<span>📅 ${esc(t.debut)}${t.fin ? ' → ' + esc(t.fin) : ''}</span>` : ''}
-          ${t.url_lichess ? `<a href="${esc(t.url_lichess)}" target="_blank" rel="noopener" style="color:var(--accent-super);text-decoration:none">Lichess ↗</a>` : ''}
         </div>
       </div>`;
 
@@ -1276,11 +1595,25 @@
       const tour = ev.target.closest('[data-open-tour]');
       if (tour) { closeSheet('menu-modal'); ouvrirTournoi(tour.dataset.openTour); return; }
 
+      const liveTour = ev.target.closest('[data-open-live]');
+      if (liveTour) {
+        const [tid, rid] = liveTour.dataset.openLive.split('|');
+        ouvrirTournoiDirect(tid, rid || null);
+        return;
+      }
+
       const ronde = ev.target.closest('[data-choose-ronde]');
       if (ronde) {
-        STATE.rondeActiveId = ronde.dataset.chooseRonde;
+        const rid = ronde.dataset.chooseRonde;
+        STATE.rondeActiveId = rid;
         closeSheet('ronde-modal');
-        renderTournoi();
+        const t = STATE.tournoiActif;
+        const rObj = (t?.rondes || []).find((x) => x.id === rid);
+        if (t?.direct && rObj && !(rObj.parties || []).length && rObj.statut !== 'a_venir') {
+          chargerRondeDirect(t, rid).then(() => renderTournoi()).catch(() => renderTournoi());
+        } else {
+          renderTournoi();
+        }
         syncUrl(true);
         return;
       }
@@ -1352,6 +1685,7 @@
 
       checkLiveLichess();
       setInterval(checkLiveLichess, 60000);
+      setInterval(refreshDirectActif, 30000);
     }
 
     window.addEventListener('popstate', () => {
