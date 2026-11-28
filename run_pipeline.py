@@ -14,7 +14,9 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
+import urllib.request
 
 import agents_flash
 import analyse
@@ -111,6 +113,222 @@ def reindexer_tournois(dossier_tournois: str = DOSSIER_TOURNOIS) -> dict:
     return index
 
 
+def _parse_eval_cp(eval_str: str | None) -> int:
+    """Convertit une évaluation formatée ('+3,33', '-1.50', '#3', '#-2') en centipions absolus."""
+    if not eval_str:
+        return 0
+    s = str(eval_str).strip()
+    if not s:
+        return 0
+    if s.startswith("#"):
+        return 1000
+    s = s.replace(",", ".").replace("+", "")
+    try:
+        return int(round(abs(float(s)) * 100))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _max_tournant_info(partie: dict) -> tuple[int, bool]:
+    """Retourne (max_cp, declenche_swing) pour une partie selon `analyse.tournants`."""
+    tournants = (partie.get("analyse") or {}).get("tournants") or []
+    max_cp = 0
+    trigger = False
+    for tr in tournants:
+        if not isinstance(tr, dict):
+            continue
+        cp = _parse_eval_cp(tr.get("eval"))
+        if cp > max_cp:
+            max_cp = cp
+        raw_dwp = tr.get("delta_wp")
+        try:
+            dwp = abs(float(raw_dwp)) if raw_dwp is not None else 0.0
+        except (TypeError, ValueError):
+            dwp = 0.0
+        if cp >= 300 or dwp >= 25.0:
+            trigger = True
+            if cp < 300 and dwp >= 25.0:
+                max_cp = max(max_cp, 300)
+    return max_cp, trigger
+
+
+def build_chess_webhook_events(ancien: dict | None, nouveau: dict) -> list[dict]:
+    """Construit les événements webhook Sport Hub sur le diff entre `ancien` et `nouveau`."""
+    if not isinstance(nouveau, dict):
+        return []
+
+    tid = (nouveau.get("id") or "").strip()
+    if not tid:
+        return []
+
+    tnom = nouveau.get("nom") or tid
+    categorie = nouveau.get("categorie") or ""
+    deep_link = f"sporthub://chess/tournament/{tid}"
+    events: list[dict] = []
+
+    if ancien is None:
+        if nouveau.get("statut") != "en_cours":
+            return []
+        rondes_courantes = [
+            r for r in (nouveau.get("rondes") or [])
+            if isinstance(r, dict) and r.get("statut") == "en_cours"
+        ]
+        for r in rondes_courantes[:1]:
+            rid = (r.get("id") or "").strip()
+            rnom = r.get("nom") or rid or "Ronde en cours"
+            if not rid:
+                continue
+            events.append({
+                "event_key": f"chess:{tid}:{rid}:round_start",
+                "sport": "chess",
+                "event_type": "round_start",
+                "title": f"{tnom} — {rnom} en cours",
+                "body": f"La ronde {rnom} du tournoi {tnom} a démarré.",
+                "spoiler_safe_title": f"{tnom} — {rnom}",
+                "spoiler_safe_body": f"Suivi en direct de {rnom} ({tnom}).",
+                "deep_link": deep_link,
+                "is_live": True,
+                "attributes": {
+                    "joueur": [],
+                    "fed": [],
+                    "categorie": categorie,
+                    "tournant_cp": 0,
+                },
+            })
+        return events
+
+    anciennes_rondes = {
+        r.get("id"): r
+        for r in (ancien.get("rondes") or [])
+        if isinstance(r, dict) and r.get("id")
+    }
+    anciennes_parties: dict[str, dict] = {}
+    for r in (ancien.get("rondes") or []):
+        if not isinstance(r, dict):
+            continue
+        for p in (r.get("parties") or []):
+            if isinstance(p, dict) and p.get("id"):
+                anciennes_parties[p["id"]] = p
+
+    for r in (nouveau.get("rondes") or []):
+        if not isinstance(r, dict):
+            continue
+        rid = (r.get("id") or "").strip()
+        if not rid:
+            continue
+        rnom = r.get("nom") or rid
+        old_r = anciennes_rondes.get(rid) or {}
+
+        if r.get("statut") == "en_cours" and old_r.get("statut") != "en_cours":
+            events.append({
+                "event_key": f"chess:{tid}:{rid}:round_start",
+                "sport": "chess",
+                "event_type": "round_start",
+                "title": f"{tnom} — Début de {rnom}",
+                "body": f"La ronde {rnom} de {tnom} vient de commencer.",
+                "spoiler_safe_title": f"{tnom} — {rnom}",
+                "spoiler_safe_body": f"La ronde {rnom} ({tnom}) a commencé.",
+                "deep_link": deep_link,
+                "is_live": True,
+                "attributes": {
+                    "joueur": [],
+                    "fed": [],
+                    "categorie": categorie,
+                    "tournant_cp": 0,
+                },
+            })
+
+        for p in (r.get("parties") or []):
+            if not isinstance(p, dict):
+                continue
+            pid = (p.get("id") or "").strip()
+            if not pid:
+                continue
+            old_p = anciennes_parties.get(pid) or {}
+
+            blancs = p.get("blancs") if isinstance(p.get("blancs"), dict) else {}
+            noirs = p.get("noirs") if isinstance(p.get("noirs"), dict) else {}
+            w_name = (blancs.get("nom") or "").strip()
+            b_name = (noirs.get("nom") or "").strip()
+            w_fed = (blancs.get("fed") or "").strip().upper()
+            b_fed = (noirs.get("fed") or "").strip().upper()
+
+            joueurs_list = [n for n in (w_name, b_name) if n]
+            feds_list = [f for f in (w_fed, b_fed) if f]
+
+            max_cp, has_swing = _max_tournant_info(p)
+            old_max_cp, old_has_swing = _max_tournant_info(old_p) if old_p else (0, False)
+
+            attrs = {
+                "joueur": joueurs_list,
+                "fed": feds_list,
+                "categorie": categorie,
+                "tournant_cp": max_cp,
+            }
+
+            pair_label = f"{w_name} – {b_name}" if (w_name and b_name) else pid
+            spoiler_title = f"{tnom} ({rnom}) — {pair_label}"
+            spoiler_body = f"Partie mise à jour dans {rnom} ({tnom})."
+
+            res = (p.get("resultat") or "").strip()
+            old_res = (old_p.get("resultat") or "").strip()
+            if res in ("1-0", "0-1", "1/2-1/2") and res != old_res:
+                events.append({
+                    "event_key": f"chess:{tid}:{pid}:game_result:{res}",
+                    "sport": "chess",
+                    "event_type": "game_result",
+                    "title": f"{pair_label} ({res}) — {tnom}",
+                    "body": f"{rnom} de {tnom} : {pair_label} se termine sur {res}.",
+                    "spoiler_safe_title": spoiler_title,
+                    "spoiler_safe_body": f"Fin de partie : {pair_label} ({rnom}, {tnom}).",
+                    "deep_link": deep_link,
+                    "is_live": False,
+                    "attributes": dict(attrs),
+                })
+
+            is_new_or_updated = (not old_p) or (p != old_p)
+            if has_swing and is_new_or_updated and (not old_has_swing or max_cp > old_max_cp):
+                events.append({
+                    "event_key": f"chess:{tid}:{pid}:eval_swing:{max_cp}",
+                    "sport": "chess",
+                    "event_type": "eval_swing",
+                    "title": f"Retournement ({max_cp} cp) : {pair_label}",
+                    "body": f"Bascule tactique majeure ({max_cp} cp) dans {pair_label} ({rnom}, {tnom}).",
+                    "spoiler_safe_title": spoiler_title,
+                    "spoiler_safe_body": spoiler_body,
+                    "deep_link": deep_link,
+                    "is_live": True,
+                    "attributes": dict(attrs),
+                })
+
+    return events
+
+
+def send_app_webhooks(events: list[dict]) -> bool:
+    """Envoie les événements échecs vers le webhook Sport Hub si configuré. 100 % optionnel et non-bloquant."""
+    webhook_url = os.environ.get("APP_WEBHOOK_URL", "").strip()
+    webhook_secret = os.environ.get("APP_WEBHOOK_SECRET", "").strip()
+    if not webhook_url or not webhook_secret or not events:
+        return False
+
+    try:
+        req = urllib.request.Request(
+            webhook_url,
+            data=json.dumps({"events": events}, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Webhook-Secret": webhook_secret,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"[WEBHOOK] {len(events)} événement(s) échecs envoyé(s) (HTTP {resp.status}).")
+            return True
+    except Exception as e:
+        print(f"[WEBHOOK] Échec non-bloquant : {e}")
+        return False
+
+
 def executer_tournois(
     dossier_tournois: str = DOSSIER_TOURNOIS,
     fichier_fide: str = os.path.join(DOSSIER_FIDE, "classement.json"),
@@ -170,6 +388,10 @@ def executer_tournois(
 
             agents_flash.enrichir_resumes_tournoi(t)
             netutil.save_json_if_changed(path, t)
+            try:
+                send_app_webhooks(build_chess_webhook_events(ancien, t))
+            except Exception as e:
+                print(f"[WEBHOOK] Échec non-bloquant ({tid}) : {e}")
             traites += 1
 
     idx = reindexer_tournois(dossier_tournois)
